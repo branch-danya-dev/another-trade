@@ -115,3 +115,27 @@ class Kline:
             "volume": str(self.volume),
             "turnover": str(self.turnover),
         }
+
+
+class MarkPriceKline:
+    __slots__ = ("close", "high", "low", "open", "start_ms")
+
+    def __init__(self, row: list[str]) -> None:
+        if len(row) < 5:
+            raise ValueError(f"invalid mark-price row length: {len(row)}")
+        if any(isinstance(item, float) for item in row):
+            raise TypeError("float is forbidden in mark-price payload")
+        self.start_ms = int(row[0])
+        self.open = Decimal(row[1])
+        self.high = Decimal(row[2])
+        self.low = Decimal(row[3])
+        self.close = Decimal(row[4])
+
+    def as_dict(self) -> dict[str, str | int]:
+        return {
+            "start_ms": self.start_ms,
+            "open": str(self.open),
+            "high": str(self.high),
+            "low": str(self.low),
+            "close": str(self.close),
+        }
