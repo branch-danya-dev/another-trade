@@ -17,7 +17,7 @@ import pyarrow.parquet as pq
 
 from another_trade.audit.inventory import InventorySnapshot, currently_eligible_crypto_perpetual
 from another_trade.bybit.client import BybitPublicClient
-from another_trade.bybit.models import Instrument, Kline
+from another_trade.bybit.models import FundingItem, Instrument, Kline
 from another_trade.io import atomic_write_bytes
 from another_trade.time import interval_ms, utc_ms
 
@@ -559,8 +559,8 @@ def _funding_events_for_month(
     symbol: str,
     bounds: MonthBounds,
     now_ms: int,
-) -> list[object]:
-    events_by_identity: dict[tuple[str, str, str], object] = {}
+) -> list[FundingItem]:
+    events_by_identity: dict[tuple[str, str, str], FundingItem] = {}
     cursor = bounds.start_ms
     chunk_ms = 7 * DAY_MS
     while cursor < bounds.end_ms:
@@ -593,11 +593,9 @@ def compare_mark_price_funding_opens(
         now_ms=now_ms,
     )
     timestamps = [
-        int(item.fundingRateTimestamp)  # type: ignore[attr-defined]
+        int(item.fundingRateTimestamp)
         for item in funding
-        if bounds.start_ms
-        <= int(item.fundingRateTimestamp)  # type: ignore[attr-defined]
-        < bounds.end_ms
+        if bounds.start_ms <= int(item.fundingRateTimestamp) < bounds.end_ms
     ]
     aligned = [timestamp for timestamp in timestamps if timestamp % HOUR_MS == 0]
 
