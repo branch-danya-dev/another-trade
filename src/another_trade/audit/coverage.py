@@ -81,6 +81,10 @@ class SymbolCoverage:
     funding_probe: FundingProbeResult
 
 
+def _funding_is_applicable(instrument: Instrument) -> bool:
+    return instrument.contractType == "LinearPerpetual"
+
+
 def _has_lifetime_metadata_conflict(
     *,
     first_trade_ms: int | None,
@@ -472,7 +476,7 @@ def probe_symbol(
     funding_start = max(origin, funding_point - 4 * DAY_MS)
     funding_end = min(effective_end - 1, funding_point + 4 * DAY_MS)
 
-    if instrument.contractType != "LinearPerpetual":
+    if not _funding_is_applicable(instrument):
         funding_probe = FundingProbeResult(
             symbol=instrument.symbol,
             checkpoint_ms=funding_point,
