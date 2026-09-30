@@ -61,6 +61,22 @@ class MarkPriceSeries:
     unfinished_filtered: int
 
 
+@dataclass(frozen=True, slots=True)
+class RawMarkPricePage:
+    series: MarkPriceSeries
+    raw: bytes
+    endpoint: str
+    params: dict[str, str | int]
+
+
+@dataclass(frozen=True, slots=True)
+class RawFundingPage:
+    items: tuple[FundingItem, ...]
+    raw: bytes
+    endpoint: str
+    params: dict[str, str | int]
+
+
 class BybitPublicClient:
     def __init__(
         self,
@@ -481,35 +497,13 @@ class BybitPublicClient:
             newest_raw_start_ms=newest_raw_seen,
         )
 
-    def mark_price_page(
+    def _parse_mark_price_raw(
         self,
+        raw: bytes,
         *,
-        symbol: str,
-        start_ms: int,
-        end_ms: int,
-        interval: str = "60",
-        limit: int = 1000,
-        now_ms: int | None = None,
+        interval: str,
+        now_ms: int,
     ) -> MarkPriceSeries:
-        if limit < 1 or limit > 1000:
-            raise ValueError("Bybit mark-price kline limit must be 1..1000")
-        self._validate_kline_range(start_ms, end_ms, interval)
-
-        now_value = int(time.time() * 1000) if now_ms is None else now_ms
-        step = interval_ms(interval)
-        immutable_before = now_value - CACHE_IMMUTABILITY_HORIZON_MS
-        raw = self._request_raw(
-            "/v5/market/mark-price-kline",
-            {
-                "category": "linear",
-                "symbol": symbol,
-                "interval": interval,
-                "start": start_ms,
-                "end": end_ms,
-                "limit": limit,
-            },
-            cacheable=end_ms + step <= immutable_before,
-        )
         try:
             envelope = KlineEnvelope.model_validate(self._decode(raw))
         except ValidationError as exc:
@@ -522,7 +516,7 @@ class BybitPublicClient:
                 candle = MarkPriceKline(row)
             except (ValueError, TypeError, DecimalException, IndexError) as exc:
                 raise BybitApiError(-1, f"invalid mark-price row {row!r}: {exc}") from exc
-            if close_time_ms(candle.start_ms, interval) > now_value:
+            if close_time_ms(candle.start_ms, interval) > now_ms:
                 unfinished += 1
                 continue
             candles.append(candle)
@@ -532,6 +526,62 @@ class BybitPublicClient:
             raw_row_count=len(envelope.result.list),
             unfinished_filtered=unfinished,
         )
+
+    def mark_price_page_with_raw(
+        self,
+        *,
+        symbol: str,
+        start_ms: int,
+        end_ms: int,
+        interval: str = "60",
+        limit: int = 1000,
+        now_ms: int | None = None,
+    ) -> RawMarkPricePage:
+        if limit < 1 or limit > 1000:
+            raise ValueError("Bybit mark-price kline limit must be 1..1000")
+        self._validate_kline_range(start_ms, end_ms, interval)
+
+        now_value = int(time.time() * 1000) if now_ms is None else now_ms
+        step = interval_ms(interval)
+        immutable_before = now_value - CACHE_IMMUTABILITY_HORIZON_MS
+        params: dict[str, str | int] = {
+            "category": "linear",
+            "symbol": symbol,
+            "interval": interval,
+            "start": start_ms,
+            "end": end_ms,
+            "limit": limit,
+        }
+        raw = self._request_raw(
+            "/v5/market/mark-price-kline",
+            params,
+            cacheable=end_ms + step <= immutable_before,
+        )
+        return RawMarkPricePage(
+            series=self._parse_mark_price_raw(raw, interval=interval, now_ms=now_value),
+            raw=raw,
+            endpoint="/v5/market/mark-price-kline",
+            params=params,
+        )
+
+    def mark_price_page(
+        self,
+        *,
+        symbol: str,
+        start_ms: int,
+        end_ms: int,
+        interval: str = "60",
+        limit: int = 1000,
+        now_ms: int | None = None,
+    ) -> MarkPriceSeries:
+        return self.mark_price_page_with_raw(
+            symbol=symbol,
+            start_ms=start_ms,
+            end_ms=end_ms,
+            interval=interval,
+            limit=limit,
+            now_ms=now_ms,
+        ).series
 
     @staticmethod
     def _funding_cache_guard(now_ms: int) -> Callable[[bytes], bool]:
@@ -547,6 +597,44 @@ class BybitPublicClient:
 
         return guard
 
+    def funding_page_with_raw(
+        self,
+        *,
+        symbol: str,
+        start_ms: int | None,
+        end_ms: int,
+        limit: int = 200,
+        now_ms: int | None = None,
+    ) -> RawFundingPage:
+        if limit < 1 or limit > 200:
+            raise ValueError("Bybit funding limit must be 1..200")
+        now_value = int(time.time() * 1000) if now_ms is None else now_ms
+        immutable_before = now_value - CACHE_IMMUTABILITY_HORIZON_MS
+        params: dict[str, str | int] = {
+            "category": "linear",
+            "symbol": symbol,
+            "endTime": end_ms,
+            "limit": limit,
+        }
+        if start_ms is not None:
+            params["startTime"] = start_ms
+        raw = self._request_raw(
+            "/v5/market/funding/history",
+            params,
+            cacheable=end_ms < immutable_before,
+            cache_guard=self._funding_cache_guard(now_value),
+        )
+        try:
+            envelope = FundingEnvelope.model_validate(self._decode(raw))
+        except ValidationError as exc:
+            raise BybitApiError(-1, f"funding schema error: {exc}") from exc
+        return RawFundingPage(
+            items=tuple(envelope.result.list),
+            raw=raw,
+            endpoint="/v5/market/funding/history",
+            params=params,
+        )
+
     def funding_page(
         self,
         *,
@@ -556,24 +644,12 @@ class BybitPublicClient:
         limit: int = 200,
         now_ms: int | None = None,
     ) -> list[FundingItem]:
-        if limit < 1 or limit > 200:
-            raise ValueError("Bybit funding limit must be 1..200")
-        now_value = int(time.time() * 1000) if now_ms is None else now_ms
-        immutable_before = now_value - CACHE_IMMUTABILITY_HORIZON_MS
-        raw = self._request_raw(
-            "/v5/market/funding/history",
-            {
-                "category": "linear",
-                "symbol": symbol,
-                "startTime": start_ms,
-                "endTime": end_ms,
-                "limit": limit,
-            },
-            cacheable=end_ms < immutable_before,
-            cache_guard=self._funding_cache_guard(now_value),
+        return list(
+            self.funding_page_with_raw(
+                symbol=symbol,
+                start_ms=start_ms,
+                end_ms=end_ms,
+                limit=limit,
+                now_ms=now_ms,
+            ).items
         )
-        try:
-            envelope = FundingEnvelope.model_validate(self._decode(raw))
-        except ValidationError as exc:
-            raise BybitApiError(-1, f"funding schema error: {exc}") from exc
-        return envelope.result.list
