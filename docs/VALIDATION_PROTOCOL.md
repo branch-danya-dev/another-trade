@@ -1,10 +1,12 @@
-# Validation Protocol v0.2
+# Validation Protocol v0.2.1
 
 Status: **PRE-REGISTERED**
 
 This document defines when strategy v0.2 is considered PASS, FAIL, or INCONCLUSIVE.
 
 The purpose is to prevent repeated historical testing from turning validation data into another development set.
+
+Canonical strategy: [SPEC_V0.2.1.md](SPEC_V0.2.1.md).
 
 ---
 
@@ -43,12 +45,28 @@ Validation may be opened only after:
 
 - SPEC_V0.2 is frozen;
 - Data Contract audit is complete enough for the tested universe;
-- execution model is frozen;
+- Decision Cost Model and execution models are frozen;
 - baseline and robustness neighbors are frozen;
 - code tests pass;
 - the development funnel report is archived.
 
 If strategy behavior changes after validation is opened, 2025 is permanently contaminated for that new version and may no longer be described as unseen OOS.
+
+### Minimum validation sample
+
+The 2025 validation partition has a pre-registered minimum:
+
+```text
+N_2025 >= 100 filled setups
+```
+
+If `N_2025 < 100`:
+
+- if any mandatory directional/economic point estimate is non-positive, the result is `FAIL_VALIDATION`;
+- otherwise the result is `INCONCLUSIVE_VALIDATION`;
+- the 2026 final holdout remains sealed.
+
+There is no subjective "obviously too small" exception.
 
 ### Final holdout
 
@@ -88,7 +106,9 @@ portfolio reserved risk     1.0% realized equity
 TP1                         50% at 2 R_price
 ```
 
-Execution-model parameters are stored separately under an explicit version and must be frozen before validation.
+The Decision Cost Model is stored under an explicit immutable config version. BASE/STRESS/SEVERE execution-model parameters are separate versioned configs. All must be frozen before validation.
+
+Changing live/account fee assumptions must never silently alter the Decision Cost Model.
 
 ---
 
@@ -151,15 +171,19 @@ The final 2026 holdout remains sealed.
 
 Validation gate passes only if all of the following are true:
 
-1. baseline 2025 mean net_R per filled setup > 0;
-2. baseline 2025 total net PnL > 0;
-3. baseline STRESS execution scenario 2025 mean net_R >= 0;
-4. at least 8 of 10 frozen neighboring configurations have positive mean net_R in 2025;
-5. no discovered data or code defect invalidates the run.
+1. `N_2025 >= 100` filled setups;
+2. baseline 2025 mean net_R per filled setup > 0;
+3. baseline 2025 total net PnL > 0;
+4. baseline STRESS shadow-execution 2025 mean net_R >= 0;
+5. baseline STRESS shadow-execution 2025 total net PnL >= 0;
+6. at least 8 of 10 frozen neighboring configurations have positive mean net_R in 2025;
+7. no discovered data or code defect invalidates the run.
 
-If any of conditions 1–4 is negative, v0.2 is **FAIL_VALIDATION** and final holdout stays sealed.
+BASE/STRESS/SEVERE must consume the same canonical decisions, quantities, fills/triggers, and trade membership. Scenario PnL may not feed back into later strategy decisions.
 
-If the point estimates are non-negative but sample size is obviously too small for meaningful inference, the validation result may be labeled **INCONCLUSIVE_VALIDATION**; final holdout must remain sealed unless the pre-registered review explicitly confirms that the original gate conditions above are numerically satisfied.
+If any mandatory baseline or stress point estimate is negative/non-positive where the condition above requires strict positivity/non-negativity, v0.2.1 is **FAIL_VALIDATION** and final holdout stays sealed.
+
+If all required point-estimate conditions pass but `N_2025 < 100`, the result is **INCONCLUSIVE_VALIDATION** and final holdout stays sealed.
 
 No parameter may be selected because it beat the baseline in validation.
 
@@ -287,8 +311,8 @@ combined baseline total net PnL > 0
 ### Execution stress
 
 ```text
-combined OOS STRESS mean net_R >= 0
-combined OOS STRESS total net PnL >= 0
+combined OOS STRESS shadow-ledger mean net_R >= 0
+combined OOS STRESS shadow-ledger total net PnL >= 0
 ```
 
 ### Statistical evidence
@@ -335,13 +359,16 @@ Any redesigned strategy becomes a new version.
 
 ## 11. INCONCLUSIVE
 
-A result is **INCONCLUSIVE**, not FAIL, when all frozen economic point estimates required for PASS remain positive/non-negative but evidence is insufficient.
+A result is **INCONCLUSIVE**, not FAIL, only when every point-estimate sign requirement already passes but evidence is insufficient.
 
 Primary cases:
 
-1. combined OOS N < 200; or
-2. weekly block-bootstrap 95% CI lower bound <= 0 while baseline and stress point estimates remain non-negative; or
-3. data coverage is adequate for directional research but insufficient for a parity-quality claim.
+1. `N_2025 < 100` while all mandatory 2025 baseline/stress point estimates satisfy their required signs;
+2. combined OOS N < 200 while all mandatory baseline/stress point estimates satisfy their required signs; or
+3. weekly block-bootstrap 95% CI lower bound <= 0 while baseline mean net_R and total net PnL remain strictly positive and STRESS mean net_R / total net PnL remain non-negative; or
+4. data coverage is adequate for directional research but insufficient for a parity-quality claim.
+
+A non-positive baseline mean net_R or total net PnL is never reclassified as INCONCLUSIVE merely because N is small.
 
 INCONCLUSIVE must not trigger parameter changes based on OOS observations.
 
@@ -433,6 +460,7 @@ Every development, validation, or holdout result must persist:
 run_id
 run_type
 spec_version
+decision_cost_model_version
 execution_model_version
 git_commit_sha
 dataset_version
