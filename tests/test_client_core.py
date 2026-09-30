@@ -23,23 +23,16 @@ def fixture(name: str) -> bytes:
 def test_real_closed_inventory_fixture_is_strictly_parsed() -> None:
     raw = fixture("instruments_closed.json")
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, content=raw, request=request)
-
-    client = BybitPublicClient(
-        transport=httpx.MockTransport(handler),
-        requests_per_second=None,
-    )
-    try:
-        items = client.instruments("Closed")
-    finally:
-        client.close()
+    items, next_cursor = BybitPublicClient.parse_instruments_page(raw)
 
     assert items
     assert any(item.status == "Closed" for item in items)
     assert any(
         item.contractType == "LinearPerpetual" and item.quoteCoin == "USDT" for item in items
     )
+    # A real first page may legitimately contain a cursor. This test verifies one-page
+    # schema parsing only; pagination is tested separately with controlled responses.
+    assert next_cursor is None or isinstance(next_cursor, str)
 
 
 def test_real_nonzero_retcode_is_not_hidden_by_http_200() -> None:
@@ -110,3 +103,51 @@ def test_json_numeric_float_is_decoded_as_decimal() -> None:
     payload = BybitPublicClient._decode(b'{"retCode":0,"retMsg":"OK","x":0.1}')
     assert payload["x"] == Decimal("0.1")
     assert not isinstance(payload["x"], float)
+
+
+def test_instruments_pagination_follows_cursor_and_stops() -> None:
+    first = json.dumps(
+        {
+            "retCode": 0,
+            "retMsg": "OK",
+            "result": {
+                "category": "linear",
+                "list": [],
+                "nextPageCursor": "cursor-2",
+            },
+            "retExtInfo": {},
+            "time": 1,
+        }
+    ).encode()
+    second = json.dumps(
+        {
+            "retCode": 0,
+            "retMsg": "OK",
+            "result": {
+                "category": "linear",
+                "list": [],
+                "nextPageCursor": "",
+            },
+            "retExtInfo": {},
+            "time": 2,
+        }
+    ).encode()
+    seen_queries: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen_queries.append(str(request.url))
+        body = second if "cursor=cursor-2" in str(request.url) else first
+        return httpx.Response(200, content=body, request=request)
+
+    client = BybitPublicClient(
+        transport=httpx.MockTransport(handler),
+        requests_per_second=None,
+    )
+    try:
+        items = client.instruments("Closed")
+    finally:
+        client.close()
+
+    assert items == []
+    assert len(seen_queries) == 2
+    assert "cursor=cursor-2" in seen_queries[1]

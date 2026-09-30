@@ -183,6 +183,39 @@ class BybitPublicClient:
             raise last_rate_error
         raise RuntimeError("unreachable retry loop")
 
+    @staticmethod
+    def parse_instruments_page(raw: bytes) -> tuple[list[Instrument], str | None]:
+        """Parse exactly one real instruments-info response page."""
+        try:
+            envelope = InstrumentsEnvelope.model_validate(BybitPublicClient._decode(raw))
+        except ValidationError as exc:
+            raise BybitApiError(-1, f"instrument schema error: {exc}") from exc
+        return envelope.result.list, envelope.result.nextPageCursor or None
+
+    def instruments_page(
+        self,
+        status: str,
+        *,
+        cursor: str | None = None,
+        limit: int = 1000,
+    ) -> tuple[list[Instrument], str | None]:
+        if status not in {"Trading", "Closed"}:
+            raise ValueError("inventory status must be Trading or Closed")
+        if limit < 1 or limit > 1000:
+            raise ValueError("Bybit instruments-info limit must be 1..1000")
+
+        raw = self._request_raw(
+            "/v5/market/instruments-info",
+            {
+                "category": "linear",
+                "status": status,
+                "limit": limit,
+                "cursor": cursor,
+            },
+            cacheable=False,
+        )
+        return self.parse_instruments_page(raw)
+
     def instruments(self, status: str) -> list[Instrument]:
         if status not in {"Trading", "Closed"}:
             raise ValueError("inventory status must be Trading or Closed")
@@ -190,22 +223,8 @@ class BybitPublicClient:
         seen_cursors: set[str] = set()
         out: list[Instrument] = []
         while True:
-            raw = self._request_raw(
-                "/v5/market/instruments-info",
-                {
-                    "category": "linear",
-                    "status": status,
-                    "limit": 1000,
-                    "cursor": cursor,
-                },
-                cacheable=False,
-            )
-            try:
-                envelope = InstrumentsEnvelope.model_validate(self._decode(raw))
-            except ValidationError as exc:
-                raise BybitApiError(-1, f"instrument schema error: {exc}") from exc
-            out.extend(envelope.result.list)
-            next_cursor = envelope.result.nextPageCursor or None
+            items, next_cursor = self.instruments_page(status, cursor=cursor, limit=1000)
+            out.extend(items)
             if next_cursor is None:
                 return out
             if next_cursor in seen_cursors:
