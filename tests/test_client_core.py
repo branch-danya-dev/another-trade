@@ -50,8 +50,8 @@ def test_real_nonzero_retcode_is_not_hidden_by_http_200() -> None:
         with pytest.raises(BybitApiError):
             client.kline_page(
                 symbol="THIS_SYMBOL_MUST_NOT_EXIST_USDT",
-                start_ms=1,
-                end_ms=2,
+                start_ms=0,
+                end_ms=60_000,
                 now_ms=10_000_000,
             )
     finally:
@@ -88,7 +88,7 @@ def test_retcode_10006_retries_even_with_http_200() -> None:
         series = client.kline_page(
             symbol="BTCUSDT",
             start_ms=0,
-            end_ms=9_999_999_999_999,
+            end_ms=9_999_999_960_000,
             now_ms=10_000_000_000_000,
         )
     finally:
