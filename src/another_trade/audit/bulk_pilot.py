@@ -4,6 +4,7 @@ import gzip
 import hashlib
 import json
 import sqlite3
+import time
 from collections.abc import Iterator, Sequence
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
@@ -655,9 +656,12 @@ def download_symbol_month(
     raw_path = run_dir / "raw" / symbol / f"{bounds.label}.sqlite3"
     parquet_path = run_dir / "parquet" / symbol / f"{bounds.label}.parquet"
 
+    reused_pages = 0
+    downloaded_pages = 0
     with RawPageStore(raw_path, symbol=symbol, month=bounds.label) as store:
         for window in page_windows(bounds):
             if store.has_page(window.start_ms):
+                reused_pages += 1
                 continue
             page = client.kline_page_with_raw(
                 symbol=symbol,
@@ -673,8 +677,9 @@ def download_symbol_month(
                 params=page.params,
                 raw=page.raw,
                 raw_rows=page.series.raw_row_count,
-                captured_at_ms=now_ms,
+                captured_at_ms=time.time_ns() // 1_000_000,
             )
+            downloaded_pages += 1
             if abort_counter is not None:
                 abort_counter[0] += 1
                 if abort_after_pages is not None and abort_counter[0] >= abort_after_pages:
@@ -714,6 +719,10 @@ def download_symbol_month(
         "missing_minute_starts": missing[:10_000],
         "parquet_schema_version": PARQUET_SCHEMA_VERSION,
         "parquet_writer_config": PARQUET_WRITER_CONFIG,
+        "resume_metrics": {
+            "reused_pages": reused_pages,
+            "downloaded_pages": downloaded_pages,
+        },
     }
     target = run_dir / "partitions" / symbol / f"{bounds.label}.json"
     atomic_write_bytes(
