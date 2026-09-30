@@ -14,6 +14,7 @@ from another_trade.audit.bulk_pilot import (
     PARQUET_WRITER_CONFIG,
     PilotAbort,
     download_symbol_month,
+    instrument_covers_month,
     parse_month,
     pilot_symbol_diagnostics,
     select_default_pilot_symbols,
@@ -21,7 +22,11 @@ from another_trade.audit.bulk_pilot import (
 )
 from another_trade.audit.coverage import run_sample_coverage, write_coverage
 from another_trade.audit.identity import load_identity_config
-from another_trade.audit.inventory import collect_inventory, write_inventory
+from another_trade.audit.inventory import (
+    collect_inventory,
+    currently_eligible_crypto_perpetual,
+    write_inventory,
+)
 from another_trade.bybit.client import BybitPublicClient
 from another_trade.io import atomic_write_bytes
 
@@ -190,6 +195,11 @@ def bulk_pilot(
     ] = None,
 ) -> None:
     bounds = parse_month(month)
+    development_end = parse_month("2025-01").start_ms
+    if bounds.end_ms > development_end:
+        raise typer.BadParameter(
+            "bulk pilot is restricted to the development partition ending 2025-01-01"
+        )
     now_ms = time.time_ns() // 1_000_000
     git_sha = _git_commit_sha()
 
@@ -278,6 +288,17 @@ def bulk_pilot(
         if missing_symbols:
             raise typer.BadParameter(
                 f"pilot symbols missing from inventory: {missing_symbols}"
+            )
+        invalid_symbols = [
+            symbol
+            for symbol in selected
+            if not currently_eligible_crypto_perpetual(by_symbol[symbol])
+            or not instrument_covers_month(by_symbol[symbol], bounds)
+        ]
+        if invalid_symbols:
+            raise typer.BadParameter(
+                "pilot symbols must be eligible perpetuals covering the full month: "
+                f"{invalid_symbols}"
             )
 
         artifacts = []
