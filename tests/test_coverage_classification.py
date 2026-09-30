@@ -29,7 +29,10 @@ def instrument() -> Instrument:
 def test_empty_response_is_classified_not_treated_as_zero_volume() -> None:
     item = instrument()
     assert classify_empty(item, 999, first_trade_ms=None) is ProbeClassification.BEFORE_LAUNCH
-    assert classify_empty(item, 3000, first_trade_ms=None) is ProbeClassification.EMPTY_DURING_LIFETIME
+    assert (
+        classify_empty(item, 3000, first_trade_ms=None)
+        is ProbeClassification.EMPTY_DURING_LIFETIME
+    )
     assert classify_empty(item, 5000, first_trade_ms=None) is ProbeClassification.AFTER_DELIST
 
 
