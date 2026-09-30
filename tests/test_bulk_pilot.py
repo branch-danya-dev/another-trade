@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+import json
+import sqlite3
 from decimal import Decimal
 from pathlib import Path
+
+import httpx
+import pyarrow.parquet as pq
 
 from another_trade.audit.bulk_pilot import (
     DAY_MS,
@@ -10,6 +15,8 @@ from another_trade.audit.bulk_pilot import (
     PartitionStatus,
     RawPageStore,
     aggregate_candles,
+    compare_pilot_runs,
+    download_symbol_month,
     logical_content_sha256,
     missing_minute_starts,
     page_windows,
@@ -17,6 +24,7 @@ from another_trade.audit.bulk_pilot import (
     partition_status,
     write_partition_parquet,
 )
+from another_trade.bybit.client import BybitPublicClient
 from another_trade.bybit.models import Kline
 
 
@@ -162,3 +170,192 @@ def test_parquet_rewrite_has_same_logical_and_file_hash(tmp_path: Path) -> None:
 
     assert logical_a == logical_b == logical_content_sha256("BTCUSDT", candles)
     assert file_a == file_b
+
+
+
+def test_aux_raw_store_uses_endpoint_params_identity(tmp_path: Path) -> None:
+    path = tmp_path / "BTCUSDT" / "2024-06.sqlite3"
+    params_a = {
+        "category": "linear",
+        "symbol": "BTCUSDT",
+        "interval": "60",
+        "start": 0,
+        "end": 3_600_000,
+        "limit": 1000,
+    }
+    params_b = {
+        **params_a,
+        "interval": "1",
+        "end": 0,
+        "limit": 1,
+    }
+    raw_a = b'{"retCode":0,"retMsg":"OK","result":{"list":[["0","1","1","1","1"]]}}'
+    raw_b = b'{"retCode":0,"retMsg":"OK","result":{"list":[["0","2","2","2","2"]]}}'
+
+    with RawPageStore(path, symbol="BTCUSDT", month="2024-06") as store:
+        store.put_aux(
+            stream="mark:60",
+            range_start_ms=0,
+            range_end_ms=3_600_000,
+            endpoint="/v5/market/mark-price-kline",
+            params=params_a,
+            raw=raw_a,
+            raw_rows=1,
+            captured_at_ms=10,
+        )
+        first_hash = store.aux_index_sha256()
+        store.put_aux(
+            stream="mark:1:funding",
+            range_start_ms=0,
+            range_end_ms=0,
+            endpoint="/v5/market/mark-price-kline",
+            params=params_b,
+            raw=raw_b,
+            raw_rows=1,
+            captured_at_ms=11,
+        )
+        assert store.aux_count() == 2
+        assert store.read_aux(
+            endpoint="/v5/market/mark-price-kline",
+            params=params_a,
+        ) == raw_a
+        assert store.read_aux(
+            endpoint="/v5/market/mark-price-kline",
+            params=params_b,
+        ) == raw_b
+        assert store.aux_index_sha256() != first_hash
+
+
+def test_parquet_schema_does_not_repeat_symbol_column(tmp_path: Path) -> None:
+    path = tmp_path / "BTCUSDT" / "2024-06.parquet"
+    write_partition_parquet(
+        symbol="BTCUSDT",
+        candles=[candle(0), candle(MINUTE_MS)],
+        path=path,
+    )
+    table = pq.read_table(path)
+    assert "symbol" not in table.column_names
+    assert table.column_names == [
+        "start_ms",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+        "turnover",
+    ]
+
+
+def _write_fake_pilot_run(
+    root: Path,
+    *,
+    logical_suffix: str = "",
+) -> None:
+    manifest = {
+        "month": "2024-06",
+        "selected_symbols": ["BTCUSDT", "ETHUSDT"],
+    }
+    (root / "partitions" / "BTCUSDT").mkdir(parents=True)
+    (root / "partitions" / "ETHUSDT").mkdir(parents=True)
+    (root / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    for symbol in manifest["selected_symbols"]:
+        row = {
+            "logical_content_sha256": f"logical-{symbol}{logical_suffix}",
+            "parquet_file_sha256": f"parquet-{symbol}",
+        }
+        (root / "partitions" / symbol / "2024-06.json").write_text(
+            json.dumps(row),
+            encoding="utf-8",
+        )
+
+
+def test_clean_run_comparison_detects_logical_drift(tmp_path: Path) -> None:
+    reference = tmp_path / "reference"
+    clean = tmp_path / "clean"
+    _write_fake_pilot_run(reference)
+    _write_fake_pilot_run(clean)
+
+    same = compare_pilot_runs(reference, clean)
+    assert same["all_logical_equal"] is True
+    assert same["all_parquet_equal"] is True
+
+    row_path = clean / "partitions" / "ETHUSDT" / "2024-06.json"
+    row = json.loads(row_path.read_text(encoding="utf-8"))
+    row["logical_content_sha256"] = "different"
+    row_path.write_text(json.dumps(row), encoding="utf-8")
+
+    changed = compare_pilot_runs(reference, clean)
+    assert changed["all_logical_equal"] is False
+
+
+def test_partial_month_download_uses_only_requested_lifetime_range(tmp_path: Path) -> None:
+    bounds = parse_month("2024-09")
+    data_start = bounds.start_ms + DAY_MS
+    data_end = data_start + 2 * MINUTE_MS
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        query = request.url.params
+        start = int(query["start"])
+        end = int(query["end"])
+        rows = []
+        cursor = end
+        while cursor >= start:
+            rows.append(
+                [
+                    str(cursor),
+                    "10",
+                    "10",
+                    "10",
+                    "10",
+                    "0",
+                    "0",
+                ]
+            )
+            cursor -= MINUTE_MS
+        payload = {
+            "retCode": 0,
+            "retMsg": "OK",
+            "result": {
+                "category": "linear",
+                "symbol": "TESTUSDT",
+                "list": rows,
+            },
+            "retExtInfo": {},
+            "time": 1,
+        }
+        return httpx.Response(200, json=payload, request=request)
+
+    client = BybitPublicClient(
+        transport=httpx.MockTransport(handler),
+        requests_per_second=None,
+    )
+    try:
+        artifact = download_symbol_month(
+            client,
+            symbol="TESTUSDT",
+            bounds=bounds,
+            run_dir=tmp_path / "run",
+            now_ms=bounds.end_ms + 2 * DAY_MS,
+            data_start_ms=data_start,
+            data_end_ms=data_end,
+        )
+    finally:
+        client.close()
+
+    assert artifact.data_start_ms == data_start
+    assert artifact.data_end_ms == data_end
+    assert artifact.expected_minutes == 2
+    assert artifact.actual_minutes == 2
+    assert artifact.missing_minutes == 0
+    assert artifact.first_start_ms == data_start
+    assert artifact.last_start_ms == data_start + MINUTE_MS
+
+    raw_path = tmp_path / "run" / "raw" / "TESTUSDT" / "2024-09.sqlite3"
+    conn = sqlite3.connect(raw_path)
+    try:
+        captured = conn.execute(
+            "SELECT captured_at_ms FROM responses"
+        ).fetchone()[0]
+    finally:
+        conn.close()
+    assert captured != bounds.end_ms + 2 * DAY_MS
