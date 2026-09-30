@@ -6,7 +6,7 @@ This document defines when strategy v0.2.2 is considered PASS, FAIL, or INCONCLU
 
 The purpose is to prevent repeated historical testing from turning validation data into another development set.
 
-Canonical strategy: [SPEC_V0.2.1.md](SPEC_V0.2.1.md).
+Canonical strategy: [SPEC_V0.2.2.md](SPEC_V0.2.2.md).
 
 ---
 
@@ -43,7 +43,7 @@ Any strategy rule may change while only development data have been inspected, bu
 
 Validation may be opened only after:
 
-- SPEC_V0.2.1 is frozen;
+- SPEC_V0.2.2 is frozen;
 - [DATA_CONTRACT_V0.1.2.md](DATA_CONTRACT_V0.1.2.md) audit is complete enough for the tested universe;
 - development-only public-trade slippage calibration artifact is complete;
 - Decision Cost Model and BASE/STRESS/SEVERE execution models are frozen from development evidence;
@@ -155,7 +155,7 @@ No new neighbor may be added after validation results are visible.
 
 ## 4. Development funnel gate
 
-Before opening validation, produce the funnel defined in SPEC_V0.2.1.
+Before opening validation, produce the funnel defined in SPEC_V0.2.2.
 
 Mandatory additional estimate:
 
