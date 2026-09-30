@@ -1,0 +1,28 @@
+{
+  "version": "1",
+  "relationships": [
+    {
+      "left_symbol": "MATICUSDT",
+      "right_symbol": "POLUSDT",
+      "relation": "token_migration",
+      "confidence": "high",
+      "automatic_stitching": false,
+      "source_urls": [
+        "https://www.bybit.com/en/learn/blockchain/polygon-2-0-from-matic-to-pol"
+      ],
+      "evidence_notes": "Bybit documents Polygon's transition from MATIC to POL. Historical instrument overlap is measured independently from Bybit market metadata."
+    },
+    {
+      "left_symbol": "DATAOLD01USDT",
+      "right_symbol": "DATAUSDT",
+      "relation": "relist_or_rename_inferred",
+      "confidence": "inferred",
+      "automatic_stitching": false,
+      "source_urls": [
+        "https://announcements.bybit.com/en/article/-story-ip-data-network-data--blt2eb534d1e37d3aad/",
+        "https://announcements.bybit.com/en/article/new-listing-datausdt-perpetual-contract-with-up-to-12-5x-leverage--art34c5cee4fca8/"
+      ],
+      "evidence_notes": "Bybit publicly documents the IP→DATA rebrand and later DATAUSDT perpetual listing. DATAOLD01USDT itself is an internal-looking metadata alias and is not directly named in the public announcement, so this relationship remains inferred."
+    }
+  ]
+}
