@@ -121,15 +121,25 @@ def partition_status(bounds: MonthBounds, now_ms: int) -> PartitionStatus:
     )
 
 
-def page_windows(bounds: MonthBounds, page_size: int = 1000) -> Iterator[PageWindow]:
+def interval_page_windows(
+    bounds: MonthBounds,
+    *,
+    interval: str,
+    page_size: int = 1000,
+) -> Iterator[PageWindow]:
     if page_size < 1 or page_size > 1000:
         raise ValueError("page_size must be 1..1000")
+    step = interval_ms(interval)
     cursor = bounds.start_ms
-    final_start = bounds.end_ms - MINUTE_MS
+    final_start = bounds.end_ms - step
     while cursor <= final_start:
-        end = min(final_start, cursor + (page_size - 1) * MINUTE_MS)
+        end = min(final_start, cursor + (page_size - 1) * step)
         yield PageWindow(start_ms=cursor, end_ms=end)
-        cursor = end + MINUTE_MS
+        cursor = end + step
+
+
+def page_windows(bounds: MonthBounds, page_size: int = 1000) -> Iterator[PageWindow]:
+    yield from interval_page_windows(bounds, interval="1", page_size=page_size)
 
 
 def instrument_covers_month(item: Instrument, bounds: MonthBounds) -> bool:
@@ -616,6 +626,7 @@ def aggregate_candles(
 
 def _native_compare(
     client: BybitPublicClient,
+    store: RawPageStore,
     *,
     symbol: str,
     bounds: MonthBounds,
@@ -624,15 +635,42 @@ def _native_compare(
     now_ms: int,
 ) -> dict[str, object]:
     local = {bar.start_ms: bar for bar in aggregate_candles(candles, interval=interval)}
-    native = client.klines(
-        symbol=symbol,
-        start_ms=bounds.start_ms,
-        end_ms=bounds.end_ms - interval_ms(interval),
-        interval=interval,
-        limit=1000,
-        now_ms=now_ms,
-    )
-    native_map = {item.start_ms: item for item in native.candles}
+    native_map: dict[int, Kline] = {}
+    for window in interval_page_windows(bounds, interval=interval):
+        params: dict[str, str | int] = {
+            "category": "linear",
+            "symbol": symbol,
+            "interval": interval,
+            "start": window.start_ms,
+            "end": window.end_ms,
+            "limit": 1000,
+        }
+        endpoint = "/v5/market/kline"
+        if store.has_aux(endpoint=endpoint, params=params):
+            raw = store.read_aux(endpoint=endpoint, params=params)
+            page = client._parse_kline_raw(raw, interval=interval, now_ms=now_ms)
+        else:
+            raw_page = client.kline_page_with_raw(
+                symbol=symbol,
+                start_ms=window.start_ms,
+                end_ms=window.end_ms,
+                interval=interval,
+                limit=1000,
+                now_ms=now_ms,
+            )
+            page = raw_page.series
+            store.put_aux(
+                stream=f"kline:{interval}",
+                range_start_ms=window.start_ms,
+                range_end_ms=window.end_ms,
+                endpoint=raw_page.endpoint,
+                params=raw_page.params,
+                raw=raw_page.raw,
+                raw_rows=page.raw_row_count,
+                captured_at_ms=time.time_ns() // 1_000_000,
+            )
+        for item in page.candles:
+            native_map[item.start_ms] = item
     common = sorted(set(local) & set(native_map))
     mismatches: list[dict[str, object]] = []
     for start in common:
@@ -677,6 +715,7 @@ def _sample_funding_timestamps(items: Sequence[int], limit: int = 5) -> list[int
 
 def _funding_events_for_month(
     client: BybitPublicClient,
+    store: RawPageStore,
     *,
     symbol: str,
     bounds: MonthBounds,
@@ -687,13 +726,36 @@ def _funding_events_for_month(
     chunk_ms = 7 * DAY_MS
     while cursor < bounds.end_ms:
         chunk_end = min(bounds.end_ms - 1, cursor + chunk_ms - 1)
-        items = client.funding_page(
-            symbol=symbol,
-            start_ms=cursor,
-            end_ms=chunk_end,
-            limit=200,
-            now_ms=now_ms,
-        )
+        params: dict[str, str | int] = {
+            "category": "linear",
+            "symbol": symbol,
+            "startTime": cursor,
+            "endTime": chunk_end,
+            "limit": 200,
+        }
+        endpoint = "/v5/market/funding/history"
+        if store.has_aux(endpoint=endpoint, params=params):
+            raw = store.read_aux(endpoint=endpoint, params=params)
+            items = client._parse_funding_raw(raw)
+        else:
+            page = client.funding_page_with_raw(
+                symbol=symbol,
+                start_ms=cursor,
+                end_ms=chunk_end,
+                limit=200,
+                now_ms=now_ms,
+            )
+            items = page.items
+            store.put_aux(
+                stream="funding",
+                range_start_ms=cursor,
+                range_end_ms=chunk_end,
+                endpoint=page.endpoint,
+                params=page.params,
+                raw=page.raw,
+                raw_rows=len(items),
+                captured_at_ms=time.time_ns() // 1_000_000,
+            )
         for item in items:
             key = (item.symbol, item.fundingRateTimestamp, item.fundingRate)
             events_by_identity[key] = item
@@ -703,6 +765,7 @@ def _funding_events_for_month(
 
 def compare_mark_price_funding_opens(
     client: BybitPublicClient,
+    store: RawPageStore,
     *,
     symbol: str,
     bounds: MonthBounds,
@@ -710,6 +773,7 @@ def compare_mark_price_funding_opens(
 ) -> dict[str, object]:
     funding = _funding_events_for_month(
         client,
+        store,
         symbol=symbol,
         bounds=bounds,
         now_ms=now_ms,
@@ -721,25 +785,73 @@ def compare_mark_price_funding_opens(
     ]
     aligned = [timestamp for timestamp in timestamps if timestamp % HOUR_MS == 0]
 
-    hourly = client.mark_price_page(
-        symbol=symbol,
-        start_ms=bounds.start_ms,
-        end_ms=bounds.end_ms - HOUR_MS,
-        interval="60",
-        limit=1000,
-        now_ms=now_ms,
-    )
-    hourly_open = {item.start_ms: item.open for item in hourly.candles}
-    comparisons: list[dict[str, object]] = []
-    for timestamp in _sample_funding_timestamps(aligned):
-        minute = client.mark_price_page(
+    hourly_params: dict[str, str | int] = {
+        "category": "linear",
+        "symbol": symbol,
+        "interval": "60",
+        "start": bounds.start_ms,
+        "end": bounds.end_ms - HOUR_MS,
+        "limit": 1000,
+    }
+    mark_endpoint = "/v5/market/mark-price-kline"
+    if store.has_aux(endpoint=mark_endpoint, params=hourly_params):
+        raw = store.read_aux(endpoint=mark_endpoint, params=hourly_params)
+        hourly = client._parse_mark_price_raw(raw, interval="60", now_ms=now_ms)
+    else:
+        page = client.mark_price_page_with_raw(
             symbol=symbol,
-            start_ms=timestamp,
-            end_ms=timestamp,
-            interval="1",
-            limit=1,
+            start_ms=bounds.start_ms,
+            end_ms=bounds.end_ms - HOUR_MS,
+            interval="60",
+            limit=1000,
             now_ms=now_ms,
         )
+        hourly = page.series
+        store.put_aux(
+            stream="mark:60",
+            range_start_ms=bounds.start_ms,
+            range_end_ms=bounds.end_ms - HOUR_MS,
+            endpoint=page.endpoint,
+            params=page.params,
+            raw=page.raw,
+            raw_rows=hourly.raw_row_count,
+            captured_at_ms=time.time_ns() // 1_000_000,
+        )
+
+    hourly_open = {item.start_ms: item.open for item in hourly.candles}
+    comparisons: list[dict[str, object]] = []
+    for timestamp in aligned:
+        minute_params: dict[str, str | int] = {
+            "category": "linear",
+            "symbol": symbol,
+            "interval": "1",
+            "start": timestamp,
+            "end": timestamp,
+            "limit": 1,
+        }
+        if store.has_aux(endpoint=mark_endpoint, params=minute_params):
+            raw = store.read_aux(endpoint=mark_endpoint, params=minute_params)
+            minute = client._parse_mark_price_raw(raw, interval="1", now_ms=now_ms)
+        else:
+            page = client.mark_price_page_with_raw(
+                symbol=symbol,
+                start_ms=timestamp,
+                end_ms=timestamp,
+                interval="1",
+                limit=1,
+                now_ms=now_ms,
+            )
+            minute = page.series
+            store.put_aux(
+                stream="mark:1:funding",
+                range_start_ms=timestamp,
+                range_end_ms=timestamp,
+                endpoint=page.endpoint,
+                params=page.params,
+                raw=page.raw,
+                raw_rows=minute.raw_row_count,
+                captured_at_ms=time.time_ns() // 1_000_000,
+            )
         minute_open = minute.candles[0].open if minute.candles else None
         hour_open = hourly_open.get(timestamp)
         comparisons.append(
@@ -757,6 +869,7 @@ def compare_mark_price_funding_opens(
         "hour_alignment_rate": (
             len(aligned) / len(timestamps) if timestamps else None
         ),
+        "comparison_mode": "ALL_HOUR_ALIGNED_FUNDING_EVENTS",
         "sample_count": len(comparisons),
         "equal_count": sum(bool(item["equal"]) for item in comparisons),
         "all_equal": bool(comparisons) and all(bool(item["equal"]) for item in comparisons),
@@ -865,27 +978,33 @@ def pilot_symbol_diagnostics(
     with RawPageStore(raw_path, symbol=symbol, month=bounds.label) as store:
         candles = _parse_store_candles(client, store, bounds, now_ms=now_ms)
 
-    aggregation = [
-        _native_compare(
+        aggregation = [
+            _native_compare(
+                client,
+                store,
+                symbol=symbol,
+                bounds=bounds,
+                candles=candles,
+                interval=interval,
+                now_ms=now_ms,
+            )
+            for interval in ("15", "60", "D")
+        ]
+        mark = compare_mark_price_funding_opens(
             client,
+            store,
             symbol=symbol,
             bounds=bounds,
-            candles=candles,
-            interval=interval,
             now_ms=now_ms,
         )
-        for interval in ("15", "60", "D")
-    ]
-    mark = compare_mark_price_funding_opens(
-        client,
-        symbol=symbol,
-        bounds=bounds,
-        now_ms=now_ms,
-    )
+        aux_count = store.aux_count()
+        aux_hash = store.aux_index_sha256()
     return {
         "symbol": symbol,
         "aggregation": aggregation,
         "mark_price_funding_open_comparison": mark,
+        "aux_raw_count": aux_count,
+        "aux_raw_index_sha256": aux_hash,
     }
 
 
