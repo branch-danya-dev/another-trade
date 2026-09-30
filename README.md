@@ -61,7 +61,9 @@ final holdout
   ↓
 demo forward test
   ↓
-minimal-size real trading only after protocol PASS
+pre-live operations / compliance gate
+  ↓
+minimal-size real trading only after protocol PASS + deployment gate PASS
 ```
 
 ## Exchange / external data
@@ -73,7 +75,7 @@ Planned data classes:
 - instrument universe and contract metadata;
 - 1m historical klines;
 - derived 15m / 1H / daily / weekly bars;
-- funding history;
+- funding history and 1m Mark Price history;
 - official U.S. CPI and Employment Situation release schedules from BLS;
 - FOMC meeting / statement calendar from the Federal Reserve.
 
