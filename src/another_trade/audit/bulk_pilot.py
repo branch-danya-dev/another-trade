@@ -25,8 +25,8 @@ from another_trade.time import interval_ms, utc_ms
 MINUTE_MS = 60_000
 HOUR_MS = 3_600_000
 DAY_MS = 86_400_000
-RAW_SCHEMA_VERSION = 1
-PARQUET_SCHEMA_VERSION = 1
+RAW_SCHEMA_VERSION = 2
+PARQUET_SCHEMA_VERSION = 2
 DECIMAL_TYPE = pa.decimal128(38, 18)
 PARQUET_COMPRESSION = "zstd"
 PARQUET_COMPRESSION_LEVEL = 9
@@ -229,6 +229,23 @@ class RawPageStore:
             )
             """
         )
+        self.conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS aux_responses (
+                request_key TEXT PRIMARY KEY,
+                stream TEXT NOT NULL,
+                range_start_ms INTEGER NOT NULL,
+                range_end_ms INTEGER NOT NULL,
+                endpoint TEXT NOT NULL,
+                params_json TEXT NOT NULL,
+                raw_sha256 TEXT NOT NULL,
+                raw_gzip BLOB NOT NULL,
+                raw_bytes INTEGER NOT NULL,
+                raw_rows INTEGER NOT NULL,
+                captured_at_ms INTEGER NOT NULL
+            )
+            """
+        )
         self._set_metadata("schema_version", str(RAW_SCHEMA_VERSION))
         self._set_metadata("symbol", symbol)
         self._set_metadata("month", month)
@@ -315,6 +332,112 @@ class RawPageStore:
             raise RuntimeError(f"raw container corruption at page {start_ms}")
         return raw
 
+    @staticmethod
+    def _request_key(endpoint: str, params: dict[str, str | int]) -> str:
+        payload = (
+            endpoint
+            + "\n"
+            + _canonical_params(params)
+        ).encode("utf-8")
+        return hashlib.sha256(payload).hexdigest()
+
+    def has_aux(self, *, endpoint: str, params: dict[str, str | int]) -> bool:
+        key = self._request_key(endpoint, params)
+        return (
+            self.conn.execute(
+                "SELECT 1 FROM aux_responses WHERE request_key = ?",
+                (key,),
+            ).fetchone()
+            is not None
+        )
+
+    def put_aux(
+        self,
+        *,
+        stream: str,
+        range_start_ms: int,
+        range_end_ms: int,
+        endpoint: str,
+        params: dict[str, str | int],
+        raw: bytes,
+        raw_rows: int,
+        captured_at_ms: int,
+    ) -> None:
+        request_key = self._request_key(endpoint, params)
+        digest = hashlib.sha256(raw).hexdigest()
+        compressed = gzip.compress(raw, compresslevel=6, mtime=0)
+        self.conn.execute(
+            """
+            INSERT INTO aux_responses(
+                request_key, stream, range_start_ms, range_end_ms, endpoint,
+                params_json, raw_sha256, raw_gzip, raw_bytes, raw_rows,
+                captured_at_ms
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(request_key) DO NOTHING
+            """,
+            (
+                request_key,
+                stream,
+                range_start_ms,
+                range_end_ms,
+                endpoint,
+                _canonical_params(params),
+                digest,
+                compressed,
+                len(raw),
+                raw_rows,
+                captured_at_ms,
+            ),
+        )
+        self.conn.commit()
+
+    def read_aux(self, *, endpoint: str, params: dict[str, str | int]) -> bytes:
+        request_key = self._request_key(endpoint, params)
+        row = self.conn.execute(
+            "SELECT raw_sha256, raw_gzip FROM aux_responses WHERE request_key = ?",
+            (request_key,),
+        ).fetchone()
+        if row is None:
+            raise KeyError(request_key)
+        raw = gzip.decompress(row[1])
+        if hashlib.sha256(raw).hexdigest() != row[0]:
+            raise RuntimeError(f"aux raw container corruption for {request_key}")
+        return raw
+
+    def aux_count(self) -> int:
+        row = self.conn.execute("SELECT COUNT(*) FROM aux_responses").fetchone()
+        return int(row[0]) if row is not None else 0
+
+    def aux_index_sha256(self) -> str:
+        h = hashlib.sha256()
+        rows = self.conn.execute(
+            """
+            SELECT request_key, stream, range_start_ms, range_end_ms, endpoint,
+                   params_json, raw_sha256, raw_bytes, raw_rows
+            FROM aux_responses
+            ORDER BY stream, range_start_ms, endpoint, params_json
+            """
+        )
+        for row in rows:
+            line = json.dumps(
+                {
+                    "request_key": row[0],
+                    "stream": row[1],
+                    "range_start_ms": row[2],
+                    "range_end_ms": row[3],
+                    "endpoint": row[4],
+                    "params_json": row[5],
+                    "raw_sha256": row[6],
+                    "raw_bytes": row[7],
+                    "raw_rows": row[8],
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+            h.update(line)
+            h.update(b"\n")
+        return h.hexdigest()
+
     def page_count(self) -> int:
         row = self.conn.execute("SELECT COUNT(*) FROM responses").fetchone()
         return int(row[0]) if row is not None else 0
@@ -376,7 +499,6 @@ def logical_content_sha256(symbol: str, candles: Sequence[Kline]) -> str:
 def _arrow_schema() -> pa.Schema:
     return pa.schema(
         [
-            ("symbol", pa.string()),
             ("start_ms", pa.int64()),
             ("open", DECIMAL_TYPE),
             ("high", DECIMAL_TYPE),
@@ -398,7 +520,6 @@ def write_partition_parquet(
     schema = _arrow_schema()
     table = pa.Table.from_arrays(
         [
-            pa.array([symbol] * len(ordered), type=pa.string()),
             pa.array([item.start_ms for item in ordered], type=pa.int64()),
             pa.array([item.open for item in ordered], type=DECIMAL_TYPE),
             pa.array([item.high for item in ordered], type=DECIMAL_TYPE),
