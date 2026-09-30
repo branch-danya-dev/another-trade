@@ -6,19 +6,13 @@ from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
+from another_trade.audit.identity import load_identity_config
 from another_trade.bybit.client import BybitPublicClient
 from another_trade.bybit.errors import InventoryConflictError
 from another_trade.bybit.models import Instrument
 from another_trade.io import atomic_write_bytes
 
 ALLOWED_CRYPTO_SYMBOL_TYPES = {"", "innovation"}
-
-# Audit-only identity relationships observed in Bybit metadata/history.
-# These are never stitched automatically into one tradable instrument.
-KNOWN_IDENTITY_RELATIONSHIPS: tuple[tuple[str, str, str], ...] = (
-    ("MATICUSDT", "POLUSDT", "token_migration"),
-    ("DATAOLD01USDT", "DATAUSDT", "relist_or_rename"),
-)
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,9 +30,13 @@ class InventorySnapshot:
 
     @property
     def identity_relationships(self) -> list[dict[str, object]]:
+        config = load_identity_config()
         by_symbol = {item.symbol: item for item in self.instruments}
         out: list[dict[str, object]] = []
-        for left, right, relation in KNOWN_IDENTITY_RELATIONSHIPS:
+        for relationship in config.relationships:
+            left = str(relationship["left_symbol"])
+            right = str(relationship["right_symbol"])
+            relation = str(relationship["relation"])
             left_item = by_symbol.get(left)
             right_item = by_symbol.get(right)
             if left_item is None and right_item is None:
@@ -78,6 +76,11 @@ class InventorySnapshot:
                     "right_delivery_ms": right_delivery,
                     "metadata_overlap_ms": overlap_ms,
                     "automatic_stitching": False,
+                    "confidence": relationship["confidence"],
+                    "source_urls": relationship["source_urls"],
+                    "evidence_notes": relationship["evidence_notes"],
+                    "identity_config_version": config.version,
+                    "identity_config_sha256": config.sha256,
                 }
             )
         return out
@@ -150,6 +153,10 @@ def write_inventory(snapshot: InventorySnapshot, path: Path) -> None:
         "audit_sample_candidate_count": sum(
             should_sample_for_audit(item) for item in snapshot.instruments
         ),
+        "identity_relationship_config": {
+            "version": load_identity_config().version,
+            "sha256": load_identity_config().sha256,
+        },
         "identity_relationships": snapshot.identity_relationships,
         "instruments": [
             {
