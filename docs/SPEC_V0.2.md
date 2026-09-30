@@ -1,6 +1,6 @@
 # Trading Specification v0.2
 
-Status: **FROZEN FOR IMPLEMENTATION**
+Status: **SUPERSEDED BY [v0.2.1](SPEC_V0.2.1.md) BEFORE VALIDATION OPENED**
 
 This document is the canonical trading specification. Code must implement it literally. Any behavioral change requires a new specification version before implementation.
 
