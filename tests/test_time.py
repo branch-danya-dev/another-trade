@@ -19,13 +19,13 @@ def test_close_time_is_exclusive_end_without_minus_one_ms() -> None:
 
 def test_utc_ms_is_integer_datetime_arithmetic() -> None:
     value = datetime(2026, 9, 30, 21, 20, 57, 123456, tzinfo=UTC)
-    expected = 1_796_240_457_123
+    expected = 1_790_803_257_123
     assert utc_ms(value) == expected
 
 
 def test_align_down_ms() -> None:
     assert align_down_ms(123_456, "1") == 120_000
-    assert align_down_ms(86_499_999, "D") == 0
+    assert align_down_ms(86_399_999, "D") == 0
 
 
 def test_bar_closing_at_cutoff_is_excluded_by_strict_less_than() -> None:

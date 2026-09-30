@@ -186,7 +186,7 @@ def test_closed_nonempty_response_is_reused_from_cache(tmp_path: Path) -> None:
                 symbol="BTCUSDT",
                 start_ms=0,
                 end_ms=60000,
-                now_ms=200000,
+                now_ms=3 * 24 * 60 * 60 * 1000,
             )
     finally:
         client.close()
