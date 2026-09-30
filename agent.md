@@ -10,9 +10,9 @@ Do not reuse strategy logic, heuristics, risk gates, scoring systems, ML layers,
 
 The current canonical strategy is:
 
-- [docs/SPEC_V0.2.1.md](docs/SPEC_V0.2.1.md)
-- [docs/DATA_CONTRACT.md](docs/DATA_CONTRACT.md)
-- [docs/VALIDATION_PROTOCOL.md](docs/VALIDATION_PROTOCOL.md)
+- [docs/SPEC_V0.2.2.md](docs/SPEC_V0.2.2.md)
+- [docs/DATA_CONTRACT_V0.1.2.md](docs/DATA_CONTRACT_V0.1.2.md)
+- [docs/VALIDATION_PROTOCOL_V0.2.2.md](docs/VALIDATION_PROTOCOL_V0.2.2.md)
 
 If code and documentation disagree, the frozen specification wins until the specification is intentionally versioned.
 
@@ -162,11 +162,19 @@ Use IANA zones:
 
 Never hard-code DST offsets.
 
+Canonical bars are half-open `[start_time, close_time)` and:
+
+```text
+close_time = start_time + exact interval
+```
+
+Never use a `-1ms` close-time convention in strategy logic.
+
 Do not use an unfinished 1H candle for trend context.
 
 At every decision timestamp, prove that every input candle has closed.
 
-EMA50 and ATR14 must use the exact seed/smoothing definitions in SPEC_V0.2.1. Never substitute a library default without a parity test.
+EMA50 and ATR14 must use the exact seed/smoothing definitions in SPEC_V0.2.2. Never substitute a library default without a parity test.
 
 Universe cutoff is exactly 09:00 Europe/Amsterdam and only bars closing strictly before the cutoff may rank the universe.
 
@@ -202,11 +210,13 @@ It should, at minimum:
 3. test historical 1m kline coverage over instrument lifetime;
 4. inspect gap structure;
 5. test funding-history and 1m Mark Price coverage;
-6. recover missing delisted 1m candles from official trade archives where possible and reconcile overlap against Kline API;
-7. report historical grid metadata status;
-8. normalize CPI, Employment Situation, and FOMC event timestamps from official sources;
-9. produce the artifacts listed in DATA_CONTRACT.md;
-10. produce an immutable manifest/hash for the audited dataset.
+6. reconstruct historical pre-market/continuous-trading state and `official_continuous_start`;
+7. recover missing delisted 1m candles from official trade archives where possible and reconcile overlap against Kline API;
+8. report historical grid metadata status;
+9. normalize CPI, Employment Situation, and FOMC event timestamps from official sources;
+10. calibrate development-only slippage distributions from official archived public trades;
+11. produce the artifacts listed in DATA_CONTRACT_V0.1.2.md;
+12. produce an immutable manifest/hash for the audited dataset.
 
 The audit should support resumable downloads and local caching. Do not repeatedly hit APIs for already-verified immutable historical pages.
 
@@ -286,16 +296,20 @@ Before any validation run, tests must cover at least:
 - multi-level breakout outermost selection;
 - crossed-level consumption.
 
-### Closed-candle protection and indicator parity
+### Time / closed-candle protection and indicator parity
 
+- REST bar close_time equals start_time + interval, never start + interval - 1ms;
+- 08:45–09:00 bar is excluded from the 09:00 universe cutoff;
 - 10:45 decision cannot use 10:00–11:00 unfinished 1H;
 - EMA calculation excludes unfinished bars;
 - EMA50 uses SMA seed of first 50 closed 1H closes and alpha 2/51;
 - live EMA restore/recompute equals canonical historical chain;
-- ATR14 uses Wilder TR + Wilder RMA seed/smoothing;
+- EMA resets after a gap and trend remains unavailable until EMA[t] and EMA[t-3] exist;
+- ATR14 uses Wilder TR + Wilder RMA seed/smoothing and resets after a gap;
 - breakout volume average excludes breakout candle;
-- WS `confirm=true` candle reconciles against REST before entry activation;
-- reconciliation timeout rejects the setup.
+- entry decision 15m/1H bars are locally aggregated from REST 1m;
+- native WS/native higher-timeframe REST mismatch is telemetry only;
+- missing canonical REST 1m data at T+60s rejects with REJECT_DECISION_DATA_UNAVAILABLE.
 
 ### Grid
 
@@ -321,8 +335,11 @@ Before any validation run, tests must cover at least:
 - TP1 + BE same minute resolves TP1 then BE;
 - false-break only acts after confirmed 15m close.
 
-### Capacity
+### Live equity / capacity
 
+- live risk_equity = min(canonical_realized_equity, actual_realized_equity);
+- either canonical or actual -1% daily realized-loss breach blocks new risk;
+- external deposit/withdrawal/manual transfer requires explicit capital rebase before new entries;
 - pending order reserves slot;
 - pending order reserves risk;
 - remaining 1% risk capacity can reduce a new order quantity;
@@ -333,6 +350,8 @@ Before any validation run, tests must cover at least:
 
 ### News
 
+- blackout interval is [event-30m, event+30m);
+- exact event+30m is allowed;
 - blackout cancels unfilled entries;
 - consumed level remains consumed;
 - open position remains managed;
@@ -349,7 +368,9 @@ Before any validation run, tests must cover at least:
 - gap in previous day/week invalidates corresponding objective levels;
 - token migration histories remain separate;
 - trade-reconstructed 1m candles reconcile against API candles where overlap exists;
-- funding applied only at actual event timestamp using Mark Price data.
+- funding applied only at actual event timestamp using Mark Price data;
+- historical pre-market segment is excluded until official continuous-trading start is proven;
+- current isPreListing=false is never applied retroactively.
 
 ---
 
@@ -358,6 +379,8 @@ Before any validation run, tests must cover at least:
 When live/demo execution is eventually implemented:
 
 1. stop protection must be placed on exchange immediately after fill with `triggerBy=LastPrice`;
+2. entry decisions wait for canonical REST-1m reconstruction; false-break and session-end exits do not wait for REST;
+3. safety-first actual exits never reopen the position and never free canonical shadow capacity early;
 2. partial fills must resize protection to actual filled quantity;
 3. reconnect must reconcile exchange positions and orders before new decisions;
 4. race conditions such as fill-during-cancel must be idempotent;
