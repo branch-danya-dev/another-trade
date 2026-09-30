@@ -218,7 +218,7 @@ through
 the final frozen holdout date
 ```
 
-Current v0.2 split is defined in [VALIDATION_PROTOCOL.md](VALIDATION_PROTOCOL.md).
+Current v0.2.2 split is defined in [VALIDATION_PROTOCOL_V0.2.2.md](VALIDATION_PROTOCOL_V0.2.2.md).
 
 The audit must also request enough warm-up history before the first research timestamp to compute all indicators without truncation.
 
