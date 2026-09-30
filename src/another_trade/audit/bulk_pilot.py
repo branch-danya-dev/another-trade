@@ -737,7 +737,7 @@ def pilot_symbol_diagnostics(
 def _require_int(value: object, *, name: str) -> int:
     if type(value) is not int:
         raise TypeError(f"{name} must be int, got {type(value)!r}")
-    return cast(int, value)
+    return value
 
 
 def _require_dict(value: object, *, name: str) -> dict[str, object]:
