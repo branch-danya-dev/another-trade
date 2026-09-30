@@ -44,8 +44,8 @@ Any strategy rule may change while only development data have been inspected, bu
 Validation may be opened only after:
 
 - SPEC_V0.2.2 is frozen;
-- [DATA_CONTRACT_V0.1.2.md](DATA_CONTRACT_V0.1.2.md) audit is complete enough for the tested universe;
-- development-only public-trade slippage calibration artifact is complete;
+- [DATA_CONTRACT_V0.1.3.md](DATA_CONTRACT_V0.1.3.md) audit is complete enough for the tested universe;
+- development-only DCM-independent public-trade slippage calibration artifact is complete;
 - Decision Cost Model and BASE/STRESS/SEVERE execution models are frozen from development evidence;
 - baseline and robustness neighbors are frozen;
 - code tests pass;
@@ -109,7 +109,7 @@ TP1                         50% at 2 R_price
 
 The Decision Cost Model is stored under an explicit immutable config version. BASE/STRESS/SEVERE execution-model parameters are separate versioned configs. All must be frozen before validation.
 
-Slippage calibration must follow DATA_CONTRACT_V0.1.2 using development-period official public-trade archives only:
+Slippage calibration must follow DATA_CONTRACT_V0.1.3 using development-period official public-trade archives only:
 
 ```text
 DCM decision slippage → development p75

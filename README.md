@@ -19,7 +19,7 @@ The first goal is not to prove profitability. The first goal is to build a repro
 ## Documents
 
 - [Trading specification v0.2.2](docs/SPEC_V0.2.2.md)
-- [Data Contract v0.1.2](docs/DATA_CONTRACT_V0.1.2.md)
+- [Data Contract v0.1.3](docs/DATA_CONTRACT_V0.1.3.md)
 - [Validation protocol v0.2.2](docs/VALIDATION_PROTOCOL_V0.2.2.md)
 - [Live operations & compliance gate](docs/LIVE_OPERATIONS_AND_COMPLIANCE.md)
 - [Archived specification v0.2.1](docs/SPEC_V0.2.1.md)
@@ -82,4 +82,36 @@ Planned data classes:
 - official U.S. CPI and Employment Situation release schedules from BLS;
 - FOMC meeting / statement calendar from the Federal Reserve.
 
-See [docs/DATA_CONTRACT_V0.1.2.md](docs/DATA_CONTRACT_V0.1.2.md) for the audit requirements and known limitations.
+See [docs/DATA_CONTRACT_V0.1.3.md](docs/DATA_CONTRACT_V0.1.3.md) for the audit requirements and known limitations.
+
+
+## Data Audit milestone 1
+
+Install:
+
+```bash
+python -m pip install -e .
+python -m pip install pytest mypy ruff
+```
+
+Capture the required **real mainnet Bybit fixtures** once from a network where Bybit public API access is permitted:
+
+```bash
+python scripts/capture_bybit_fixtures.py
+```
+
+The capture stores raw response bytes and SHA-256 hashes under `tests/fixtures/bybit/`. Do not replace these fixtures with invented JSON or testnet data.
+
+Then run:
+
+```bash
+ruff check .
+mypy src
+pytest
+another-trade audit inventory
+another-trade audit sample-coverage
+```
+
+`sample-coverage` is intentionally not a bulk downloader. It performs only three small 1m Kline probes plus one bounded funding probe per currently eligible symbol. Review `artifacts/data-audit/coverage-summary.json` before implementing any full-history download.
+
+GitHub-hosted runners currently execute from a Bybit-restricted U.S. region, so CI validates code without requiring network access to Bybit. Real fixtures and the first sample-coverage run must be captured from an allowed network.
