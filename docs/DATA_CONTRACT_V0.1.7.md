@@ -1,6 +1,6 @@
 # Data Contract v0.1.7
 
-Status: **REQUIRED BEFORE BACKTEST IMPLEMENTATION**
+Status: **SUPERSEDED BY [v0.1.8](DATA_CONTRACT_V0.1.8.md) BEFORE VALIDATION OPENED**
 
 This document defines which external facts the project is allowed to trust, how historical coverage is audited, and which missing data block a claim of valid backtest parity.
 

@@ -11,8 +11,8 @@ Do not reuse strategy logic, heuristics, risk gates, scoring systems, ML layers,
 The current canonical strategy is:
 
 - [docs/SPEC_V0.2.5.md](docs/SPEC_V0.2.5.md)
-- [docs/DATA_CONTRACT_V0.1.7.md](docs/DATA_CONTRACT_V0.1.7.md)
-- [docs/VALIDATION_PROTOCOL_V0.2.6.md](docs/VALIDATION_PROTOCOL_V0.2.6.md)
+- [docs/DATA_CONTRACT_V0.1.8.md](docs/DATA_CONTRACT_V0.1.8.md)
+- [docs/VALIDATION_PROTOCOL_V0.2.7.md](docs/VALIDATION_PROTOCOL_V0.2.7.md)
 
 If code and documentation disagree, the frozen specification wins until the specification is intentionally versioned.
 
@@ -218,7 +218,7 @@ It should, at minimum:
 8. report historical grid metadata status;
 9. normalize CPI, Employment Situation, and FOMC event timestamps from official sources;
 10. calibrate development-only slippage distributions from official archived public trades;
-11. produce the artifacts listed in DATA_CONTRACT_V0.1.7.md;
+11. produce the artifacts listed in DATA_CONTRACT_V0.1.8.md;
 12. produce an immutable manifest/hash for the audited dataset.
 
 The audit should support resumable downloads and local caching. Do not repeatedly hit APIs for already-verified immutable historical pages.
