@@ -1,10 +1,10 @@
-# Data Contract v0.1
+# Data Contract v0.1.1
 
 Status: **REQUIRED BEFORE BACKTEST IMPLEMENTATION**
 
 This document defines which external facts the project is allowed to trust, how historical coverage is audited, and which missing data block a claim of valid backtest parity.
 
-The trading rules are defined in [SPEC_V0.2.md](SPEC_V0.2.md). This document must not change strategy behavior.
+The canonical trading rules are defined in [SPEC_V0.2.1.md](SPEC_V0.2.1.md). This document must not change strategy behavior.
 
 ---
 
@@ -23,6 +23,18 @@ Required inventories:
 
 - Trading instruments;
 - Closed instruments.
+
+The audit must filter the crypto-perpetual universe explicitly rather than trusting `category=linear` alone. Eligible metadata must satisfy the strategy contract:
+
+```text
+contractType = LinearPerpetual
+quoteCoin = USDT
+settleCoin = USDT (where present)
+isPreListing = false
+marketRegion = "" / not applicable
+```
+
+TradFi perpetuals, pre-market contracts, delivery futures, event contracts, and other non-crypto linear instruments are excluded.
 
 Fields to persist where available:
 
@@ -45,7 +57,7 @@ https://bybit-exchange.github.io/docs/v5/market/instrument
 
 Important limitation: the current endpoint describes current instrument metadata. It must not be assumed that current tickSize, qtyStep, or minimums were valid throughout the instrument's full historical lifetime.
 
-### Bybit historical klines
+### Bybit historical last-price klines
 
 Primary endpoint:
 
@@ -63,6 +75,28 @@ The canonical market-price history for the backtester is 1m OHLCV/turnover.
 15m, 1H, UTC daily, and UTC weekly bars used by the strategy must be derived from the canonical 1m dataset rather than mixing independent higher-timeframe downloads into strategy calculations.
 
 This gives one timestamp convention and one auditable aggregation path.
+
+### Bybit historical mark-price klines
+
+Primary endpoint:
+
+```text
+GET /v5/market/mark-price-kline
+category=linear
+interval=1
+```
+
+Reference:
+https://bybit-exchange.github.io/docs/v5/market/mark-kline
+
+Mark-price history is required around every funding event because Bybit computes USDT-perpetual funding from position value based on Mark Price.
+
+Persist 1m mark-price OHLC. The exact convention for the funding timestamp is:
+
+- if an exact mark-price sample at the funding timestamp is available from an official source, use it;
+- otherwise use the close of the 1m Mark Price candle immediately preceding/equal to the funding timestamp according to Bybit timestamp semantics and flag `MARK_PRICE_1M_APPROX`.
+
+The audit must quantify how often approximation is used.
 
 ### Bybit funding history
 
@@ -86,12 +120,34 @@ Never assume an 8-hour funding cycle. Funding intervals differ by instrument.
 
 ### Bybit public trade archives
 
-Use official archived public trade data when higher-resolution historical price-lattice validation is required.
+Use official archived public trade data for two purposes:
+
+1. higher-resolution historical price-lattice validation;
+2. fallback reconstruction of 1m last-price candles when the Kline API does not retain a Closed/delisted symbol's history.
 
 Reference:
 https://bybit-exchange.github.io/docs/v5/market/recent-trade
 
 The Bybit documentation explicitly points to archived historical trades for older public execution data.
+
+#### Trade-archive candle reconstruction
+
+When 1m API klines are unavailable but official trades exist, reconstruct each UTC minute deterministically:
+
+```text
+open  = first trade price in timestamp/order sequence
+high  = max trade price
+low   = min trade price
+close = last trade price
+volume = sum base quantity
+turnover = sum trade quote value
+```
+
+Do not synthesize minutes with no trades.
+
+Where both API klines and reconstructed trade candles are available, the audit must cross-check overlapping samples. Record exact OHLCV/turnover differences and a reconciliation status.
+
+A trade-reconstructed series is not silently merged with API candles. Provenance must remain visible per segment.
 
 ### U.S. CPI calendar
 
@@ -139,6 +195,21 @@ status
 ```
 
 An instrument is eligible on a historical timestamp only if that timestamp lies within its proven lifetime.
+
+### Token migrations / renames
+
+A symbol migration or token rename is treated as a new instrument identity unless Bybit supplies an explicit authoritative continuity mapping that preserves contract identity.
+
+Examples such as an old token symbol being delisted and a replacement symbol being listed must **not** be stitched into one synthetic price history.
+
+Each symbol keeps its own:
+
+- launch time;
+- delist time;
+- universe membership;
+- indicators;
+- levels;
+- funding history.
 
 A currently Trading symbol must not be treated as if it existed before launchTime.
 
@@ -204,7 +275,7 @@ Do not forward-fill execution OHLC.
 
 Do not invent a tradable minute.
 
-For strategy simulation, any 1m gap overlapping:
+For strategy simulation, any unresolved 1m gap overlapping:
 
 - a pending entry lifetime;
 - an open position;
@@ -215,7 +286,29 @@ invalidates that simulated setup unless an authoritative source fills the missin
 
 Indicator windows affected by unresolved gaps are ineligible until a complete warm-up window exists again.
 
+The same rule applies to objective levels:
+
+- PDH/PDL require a complete previous UTC day;
+- PWH/PWL require a complete previous UTC week.
+
+If any unresolved minute gap exists inside the source day/week, the corresponding high/low level pair is unavailable for trading because the missing interval could contain the true extremum.
+
+Do not calculate PDH/PDL/PWH/PWL from incomplete source periods.
+
 The audit should separately report isolated gaps and long outages.
+
+### Live WS ↔ REST candle parity
+
+For future demo/live operation, every 15m decision candle received as WebSocket `confirm=true` must be persisted and reconciled against the corresponding closed REST kline before the v0.2.1 entry activation deadline.
+
+Audit/replay fixtures must test:
+
+- exact normalized OHLCV/turnover match;
+- delayed REST availability;
+- one-tick/quantity discrepancies;
+- hard mismatch handling.
+
+A mismatch is never silently overwritten.
 
 ---
 
@@ -248,6 +341,8 @@ Monday 00:00 UTC → next Monday 00:00 UTC
 ```
 
 Aggregation must be deterministic and tested against known Bybit higher-timeframe bars on sampled periods.
+
+Universe selection uses a fixed cutoff of 09:00 Europe/Amsterdam and only 15m bars with `close_time < cutoff`. The rolling window is 96 bars producing exactly 95 internal close-to-close returns.
 
 Mismatch outside documented rounding/data behavior is a data-pipeline failure.
 
@@ -365,13 +460,28 @@ Validation checks:
 
 ## 11. Fees and execution-model inputs
 
-Live maker/taker fees are account-specific and must be read from the live account configuration/API before live trading.
+Live maker/taker fees are account-specific and must be read from the live account API for reconciliation and telemetry before live trading.
+
+They must **not** automatically change strategy decisions.
 
 Historical research answers:
 
-> Would this historical strategy have worked under the frozen fee/execution model we plan to trade now?
+> Would this historical strategy have worked under the frozen decision-cost model and execution assumptions we plan to deploy?
 
-Therefore fee assumptions are versioned research inputs, not reconstructed historical VIP tiers unless a later protocol explicitly changes this.
+### Decision Cost Model
+
+A separately versioned `decision_cost_model` contains the fixed maker fee, taker fee, stop slippage, and market-exit slippage assumptions used by:
+
+- cost-floor qualification;
+- sizing;
+- cost-adjusted BE;
+- canonical decision-ledger risk accounting.
+
+Changing these decision inputs requires an explicit config/spec version change. Live fee APIs may detect drift but may not mutate them automatically.
+
+### Execution scenarios
+
+BASE, STRESS, and SEVERE are shadow execution models. They evaluate the exact same canonical trade path and quantities. Their different fees/slippage do not feed back into trade selection, sizing, reservations, daily-stop state, or future setup availability.
 
 Slippage scenarios must be frozen before validation data are opened.
 
@@ -425,6 +535,7 @@ source_ranges
 symbol_inventory_hash
 news_calendar_hash
 funding_dataset_hash
+mark_price_dataset_hash
 price_dataset_manifest_hash
 instrument_metadata_hash
 code_commit_sha
@@ -450,6 +561,8 @@ artifacts/data-audit/
   symbols.csv
   gaps.csv
   funding.csv
+  mark-price-coverage.csv
+  kline-trade-reconciliation.csv
   grid-status.csv
   news-events.csv
   manifest.json
@@ -462,6 +575,9 @@ Summary must answer:
 - How many symbol-days are lost to gaps?
 - Can delisted symbols be represented?
 - Is funding complete enough?
+- Is 1m Mark Price history sufficient around funding timestamps?
+- How much delisted history was recovered from official trade archives?
+- Where API klines and trade-reconstructed klines overlap, do they reconcile?
 - For what share of symbol-history is historical tick size authoritative/inferred/unknown?
 - For what share is historical qtyStep/minimum metadata authoritative/unknown?
 - What known survivorship or execution-parity bias remains?
