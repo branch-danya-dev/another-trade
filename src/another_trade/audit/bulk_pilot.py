@@ -84,6 +84,8 @@ class PartitionArtifact:
     symbol: str
     month: str
     status: PartitionStatus
+    data_start_ms: int
+    data_end_ms: int
     expected_minutes: int
     actual_minutes: int
     missing_minutes: int
@@ -203,6 +205,26 @@ def select_default_pilot_symbols(
     if not any(by_symbol[symbol].status == "Closed" for symbol in selected):
         raise ValueError(f"no Closed perpetual covers pilot month {bounds.label}")
     return selected
+
+
+def select_fast_funding_symbols(
+    inventory: InventorySnapshot,
+    bounds: MonthBounds,
+    *,
+    exclude: Sequence[str],
+    count: int = 2,
+) -> list[str]:
+    candidates = [
+        item
+        for item in inventory.instruments
+        if currently_eligible_crypto_perpetual(item)
+        and instrument_covers_month(item, bounds)
+        and item.symbol not in set(exclude)
+        and item.fundingInterval is not None
+        and item.fundingInterval <= 240
+    ]
+    candidates.sort(key=lambda item: (item.fundingInterval or 10_000, item.symbol))
+    return [item.symbol for item in candidates[:count]]
 
 
 def _canonical_params(params: dict[str, str | int]) -> str:
@@ -884,16 +906,32 @@ def download_symbol_month(
     bounds: MonthBounds,
     run_dir: Path,
     now_ms: int,
+    data_start_ms: int | None = None,
+    data_end_ms: int | None = None,
     abort_counter: list[int] | None = None,
     abort_after_pages: int | None = None,
 ) -> PartitionArtifact:
+    effective_start = bounds.start_ms if data_start_ms is None else data_start_ms
+    effective_end = bounds.end_ms if data_end_ms is None else data_end_ms
+    if effective_start < bounds.start_ms or effective_end > bounds.end_ms:
+        raise ValueError("data bounds must remain inside the calendar month")
+    if effective_end <= effective_start:
+        raise ValueError("data_end_ms must be greater than data_start_ms")
+    if effective_start % MINUTE_MS != 0 or effective_end % MINUTE_MS != 0:
+        raise ValueError("data bounds must be minute aligned")
+    data_bounds = MonthBounds(
+        label=bounds.label,
+        start_ms=effective_start,
+        end_ms=effective_end,
+    )
+
     raw_path = run_dir / "raw" / symbol / f"{bounds.label}.sqlite3"
     parquet_path = run_dir / "parquet" / symbol / f"{bounds.label}.parquet"
 
     reused_pages = 0
     downloaded_pages = 0
     with RawPageStore(raw_path, symbol=symbol, month=bounds.label) as store:
-        for window in page_windows(bounds):
+        for window in page_windows(data_bounds):
             if store.has_page(window.start_ms):
                 reused_pages += 1
                 continue
@@ -921,11 +959,11 @@ def download_symbol_month(
                         f"intentional pilot abort after {abort_counter[0]} newly committed pages"
                     )
 
-        candles = _parse_store_candles(client, store, bounds, now_ms=now_ms)
+        candles = _parse_store_candles(client, store, data_bounds, now_ms=now_ms)
         raw_hash = store.logical_index_sha256()
         raw_count = store.page_count()
 
-    missing = missing_minute_starts(bounds, candles)
+    missing = missing_minute_starts(data_bounds, candles)
     logical_hash, parquet_hash = write_partition_parquet(
         symbol=symbol,
         candles=candles,
@@ -935,7 +973,9 @@ def download_symbol_month(
         symbol=symbol,
         month=bounds.label,
         status=partition_status(bounds, now_ms),
-        expected_minutes=(bounds.end_ms - bounds.start_ms) // MINUTE_MS,
+        data_start_ms=effective_start,
+        data_end_ms=effective_end,
+        expected_minutes=(effective_end - effective_start) // MINUTE_MS,
         actual_minutes=len(candles),
         missing_minutes=len(missing),
         first_start_ms=candles[0].start_ms if candles else None,
@@ -950,6 +990,8 @@ def download_symbol_month(
     partition_manifest = {
         **asdict(artifact),
         "status": artifact.status.value,
+        "calendar_month_start_ms": bounds.start_ms,
+        "calendar_month_end_ms": bounds.end_ms,
         "missing_minute_starts": missing[:10_000],
         "parquet_schema_version": PARQUET_SCHEMA_VERSION,
         "parquet_writer_config": PARQUET_WRITER_CONFIG,
@@ -1005,6 +1047,92 @@ def pilot_symbol_diagnostics(
         "mark_price_funding_open_comparison": mark,
         "aux_raw_count": aux_count,
         "aux_raw_index_sha256": aux_hash,
+    }
+
+
+def mark_price_only_diagnostics(
+    client: BybitPublicClient,
+    *,
+    symbol: str,
+    bounds: MonthBounds,
+    run_dir: Path,
+    now_ms: int,
+) -> dict[str, object]:
+    raw_path = run_dir / "raw" / symbol / f"{bounds.label}.sqlite3"
+    with RawPageStore(raw_path, symbol=symbol, month=bounds.label) as store:
+        mark = compare_mark_price_funding_opens(
+            client,
+            store,
+            symbol=symbol,
+            bounds=bounds,
+            now_ms=now_ms,
+        )
+        aux_count = store.aux_count()
+        aux_hash = store.aux_index_sha256()
+    return {
+        "symbol": symbol,
+        "mark_price_funding_open_comparison": mark,
+        "aux_raw_count": aux_count,
+        "aux_raw_index_sha256": aux_hash,
+        "mark_price_only": True,
+    }
+
+
+def compare_pilot_runs(
+    reference_run: Path,
+    candidate_run: Path,
+) -> dict[str, object]:
+    reference_manifest = json.loads(
+        (reference_run / "manifest.json").read_text(encoding="utf-8")
+    )
+    candidate_manifest = json.loads(
+        (candidate_run / "manifest.json").read_text(encoding="utf-8")
+    )
+    if reference_manifest.get("month") != candidate_manifest.get("month"):
+        raise ValueError("pilot runs use different months")
+    reference_symbols = [str(item) for item in reference_manifest["selected_symbols"]]
+    candidate_symbols = [str(item) for item in candidate_manifest["selected_symbols"]]
+    if reference_symbols != candidate_symbols:
+        raise ValueError("pilot runs use different selected_symbols")
+
+    rows: list[dict[str, object]] = []
+    all_logical_equal = True
+    all_parquet_equal = True
+    for symbol in reference_symbols:
+        ref_path = reference_run / "partitions" / symbol / (
+            f"{reference_manifest['month']}.json"
+        )
+        candidate_path = candidate_run / "partitions" / symbol / (
+            f"{candidate_manifest['month']}.json"
+        )
+        left = json.loads(ref_path.read_text(encoding="utf-8"))
+        right = json.loads(candidate_path.read_text(encoding="utf-8"))
+        logical_equal = (
+            left["logical_content_sha256"] == right["logical_content_sha256"]
+        )
+        parquet_equal = (
+            left["parquet_file_sha256"] == right["parquet_file_sha256"]
+        )
+        all_logical_equal = all_logical_equal and logical_equal
+        all_parquet_equal = all_parquet_equal and parquet_equal
+        rows.append(
+            {
+                "symbol": symbol,
+                "logical_equal": logical_equal,
+                "parquet_equal": parquet_equal,
+                "reference_logical_sha256": left["logical_content_sha256"],
+                "candidate_logical_sha256": right["logical_content_sha256"],
+                "reference_parquet_sha256": left["parquet_file_sha256"],
+                "candidate_parquet_sha256": right["parquet_file_sha256"],
+            }
+        )
+
+    return {
+        "month": reference_manifest["month"],
+        "symbol_count": len(reference_symbols),
+        "all_logical_equal": all_logical_equal,
+        "all_parquet_equal": all_parquet_equal,
+        "partitions": rows,
     }
 
 
