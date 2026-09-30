@@ -81,6 +81,18 @@ class SymbolCoverage:
     funding_probe: FundingProbeResult
 
 
+def _has_lifetime_metadata_conflict(
+    *,
+    first_trade_ms: int | None,
+    launch_ms: int,
+    prelaunch_classification: ProbeClassification,
+) -> bool:
+    launch_minute = align_down_ms(max(0, launch_ms), "1")
+    return (
+        first_trade_ms is not None and first_trade_ms < launch_minute
+    ) or prelaunch_classification is ProbeClassification.LIFETIME_METADATA_CONFLICT
+
+
 def _coverage_pct(actual: int, expected: int) -> str:
     if expected <= 0:
         return "0"
@@ -500,10 +512,11 @@ def probe_symbol(
                 error=f"{type(exc).__name__}: {exc}",
             )
 
-    launch_minute = align_down_ms(max(0, launch), "1")
-    metadata_conflict = (
-        first_trade_ms is not None and first_trade_ms < launch_minute
-    ) or prelaunch.classification is ProbeClassification.LIFETIME_METADATA_CONFLICT
+    metadata_conflict = _has_lifetime_metadata_conflict(
+        first_trade_ms=first_trade_ms,
+        launch_ms=launch,
+        prelaunch_classification=prelaunch.classification,
+    )
 
     return SymbolCoverage(
         symbol=instrument.symbol,
