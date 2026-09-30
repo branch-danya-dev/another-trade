@@ -15,6 +15,9 @@ from another_trade.audit.inventory import collect_inventory, write_inventory
 from another_trade.bybit.client import BybitPublicClient
 from another_trade.io import atomic_write_bytes
 
+SPEC_VERSION = "v0.2.3"
+DATA_CONTRACT_VERSION = "v0.1.5"
+
 app = typer.Typer(no_args_is_help=True)
 audit_app = typer.Typer(no_args_is_help=True)
 app.add_typer(audit_app, name="audit")
@@ -85,8 +88,8 @@ def coverage(
                 "now_ms": now_ms,
                 "inventory_sha256": snapshot.sha256,
                 "git_commit_sha": _git_commit_sha(),
-                "spec_version": "v0.2.3",
-                "data_contract_version": "v0.1.4",
+                "spec_version": SPEC_VERSION,
+                "data_contract_version": DATA_CONTRACT_VERSION,
                 "requests_per_second": client.requests_per_second,
                 "software_versions": {
                     "python": platform.python_version(),
@@ -113,6 +116,19 @@ def coverage(
             if manifest.get("inventory_sha256") != snapshot.sha256:
                 raise typer.BadParameter(
                     "current inventory hash differs from the run being resumed"
+                )
+            if manifest.get("spec_version") != SPEC_VERSION:
+                raise typer.BadParameter(
+                    "spec version differs from the run being resumed"
+                )
+            if manifest.get("data_contract_version") != DATA_CONTRACT_VERSION:
+                raise typer.BadParameter(
+                    "data contract version differs from the run being resumed"
+                )
+            current_commit = _git_commit_sha()
+            if manifest.get("git_commit_sha") != current_commit:
+                raise typer.BadParameter(
+                    "git commit differs from the run being resumed; start a new run"
                 )
             now_ms = int(manifest["now_ms"])
 
