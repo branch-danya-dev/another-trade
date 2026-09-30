@@ -8,7 +8,7 @@ This repository intentionally does **not** inherit trading logic, strategy engin
 
 ## Current status
 
-- Trading specification: **v0.2**
+- Trading specification: **v0.2.1**
 - Specification state: **frozen for implementation**
 - Next phase: **historical data audit / Data Contract validation**
 - Backtest implementation: not started
@@ -18,9 +18,11 @@ The first goal is not to prove profitability. The first goal is to build a repro
 
 ## Documents
 
-- [Trading specification v0.2](docs/SPEC_V0.2.md)
+- [Trading specification v0.2.1](docs/SPEC_V0.2.1.md)
+- [Archived specification v0.2](docs/SPEC_V0.2.md)
 - [Data Contract](docs/DATA_CONTRACT.md)
 - [Validation protocol](docs/VALIDATION_PROTOCOL.md)
+- [Live operations & compliance gate](docs/LIVE_OPERATIONS_AND_COMPLIANCE.md)
 - [Agent instructions](agent.md)
 
 ## Core principles
