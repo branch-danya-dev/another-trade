@@ -2,6 +2,6 @@
 
 Status: **SUPERSEDED**
 
-Canonical document: [DATA_CONTRACT_V0.1.3.md](DATA_CONTRACT_V0.1.3.md)
+Canonical document: [DATA_CONTRACT_V0.1.4.md](DATA_CONTRACT_V0.1.4.md)
 
-This unversioned path is retained only for compatibility with older links. Do not implement against cached content from this path.
+This unversioned path is retained only for compatibility with older links.

@@ -10,9 +10,9 @@ Do not reuse strategy logic, heuristics, risk gates, scoring systems, ML layers,
 
 The current canonical strategy is:
 
-- [docs/SPEC_V0.2.2.md](docs/SPEC_V0.2.2.md)
-- [docs/DATA_CONTRACT_V0.1.3.md](docs/DATA_CONTRACT_V0.1.3.md)
-- [docs/VALIDATION_PROTOCOL_V0.2.2.md](docs/VALIDATION_PROTOCOL_V0.2.2.md)
+- [docs/SPEC_V0.2.3.3.md](docs/SPEC_V0.2.3.3.md)
+- [docs/DATA_CONTRACT_V0.1.4.md](docs/DATA_CONTRACT_V0.1.4.md)
+- [docs/VALIDATION_PROTOCOL_V0.2.3.md](docs/VALIDATION_PROTOCOL_V0.2.3.md)
 
 If code and documentation disagree, the frozen specification wins until the specification is intentionally versioned.
 
@@ -144,7 +144,7 @@ Do not use binary float for exchange-grid rounding.
 
 All price/quantity rounding must go through one shared utility used by backtest and live.
 
-The rounding behavior is defined in SPEC_V0.2 and must have unit tests for LONG and SHORT cases.
+The rounding behavior is defined in SPEC_V0.2.3 and must have unit tests for LONG and SHORT cases.
 
 ---
 
@@ -174,7 +174,7 @@ Do not use an unfinished 1H candle for trend context.
 
 At every decision timestamp, prove that every input candle has closed.
 
-EMA50 and ATR14 must use the exact seed/smoothing definitions in SPEC_V0.2.2. Never substitute a library default without a parity test.
+EMA50 and ATR14 must use the exact seed/smoothing definitions in SPEC_V0.2.3.3. Never substitute a library default without a parity test.
 
 Universe cutoff is exactly 09:00 Europe/Amsterdam and only bars closing strictly before the cutoff may rank the universe.
 
@@ -187,6 +187,9 @@ Never silently:
 - forward-fill missing execution prices;
 - calculate PDH/PDL/PWH/PWL from an incomplete source day/week;
 - use today's universe for historical dates;
+- treat launchTime as proof of first trade;
+- admit unknown symbolType/status values;
+- trust current lifetime metadata when historical candles contradict it;
 - remove delisted symbols;
 - stitch token migrations/renames into one synthetic history;
 - replace unknown historical tick/qty metadata with current values;
@@ -215,7 +218,7 @@ It should, at minimum:
 8. report historical grid metadata status;
 9. normalize CPI, Employment Situation, and FOMC event timestamps from official sources;
 10. calibrate development-only slippage distributions from official archived public trades;
-11. produce the artifacts listed in DATA_CONTRACT_V0.1.3.md;
+11. produce the artifacts listed in DATA_CONTRACT_V0.1.4.md;
 12. produce an immutable manifest/hash for the audited dataset.
 
 The audit should support resumable downloads and local caching. Do not repeatedly hit APIs for already-verified immutable historical pages.
@@ -233,7 +236,7 @@ When the project reaches the backtest phase:
 - pending orders exist as explicit state;
 - reservations exist before fills;
 - live-like order lifecycle states are represented;
-- fill rules match SPEC_V0.2;
+- fill rules match SPEC_V0.2.3;
 - ambiguous OHLC order is pessimistic;
 - fees, slippage, and funding are first-class ledger entries;
 - every rejected setup stores a machine-readable reason.
@@ -362,6 +365,10 @@ Before any validation run, tests must cover at least:
 - only crypto LinearPerpetual USDT instruments are eligible;
 - TradFi/pre-listing/delivery instruments are rejected;
 - universe cutoff produces 96 bars and exactly 95 internal returns;
+- first_trade_ms is discovered from actual historical candles;
+- launchTime delay distribution is reported;
+- TradFi symbolType commodity/forex is excluded even when marketRegion is empty;
+- unexpected statuses are preserved in inventory but excluded from trading;
 - delisted instrument appears in historical universe during lifetime;
 - future listing is absent before launch;
 - unresolved 1m gap invalidates affected setup;

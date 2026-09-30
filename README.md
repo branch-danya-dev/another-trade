@@ -8,7 +8,7 @@ This repository intentionally does **not** inherit trading logic, strategy engin
 
 ## Current status
 
-- Trading specification: **v0.2.2**
+- Trading specification: **v0.2.3**
 - Specification state: **frozen for implementation**
 - Next phase: **historical data audit / Data Contract validation**
 - Backtest implementation: not started
@@ -18,9 +18,9 @@ The first goal is not to prove profitability. The first goal is to build a repro
 
 ## Documents
 
-- [Trading specification v0.2.2](docs/SPEC_V0.2.2.md)
-- [Data Contract v0.1.3](docs/DATA_CONTRACT_V0.1.3.md)
-- [Validation protocol v0.2.2](docs/VALIDATION_PROTOCOL_V0.2.2.md)
+- [Trading specification v0.2.3](docs/SPEC_V0.2.3.md)
+- [Data Contract v0.1.3](docs/DATA_CONTRACT_V0.1.4.md)
+- [Validation protocol v0.2.3](docs/VALIDATION_PROTOCOL_V0.2.3.md)
 - [Live operations & compliance gate](docs/LIVE_OPERATIONS_AND_COMPLIANCE.md)
 - [Archived specification v0.2.1](docs/SPEC_V0.2.1.md)
 - [Archived specification v0.2](docs/SPEC_V0.2.md)
@@ -82,7 +82,7 @@ Planned data classes:
 - official U.S. CPI and Employment Situation release schedules from BLS;
 - FOMC meeting / statement calendar from the Federal Reserve.
 
-See [docs/DATA_CONTRACT_V0.1.3.md](docs/DATA_CONTRACT_V0.1.3.md) for the audit requirements and known limitations.
+See [docs/DATA_CONTRACT_V0.1.4.md](docs/DATA_CONTRACT_V0.1.4.md) for the audit requirements and known limitations.
 
 
 ## Data Audit milestone 1
@@ -112,6 +112,6 @@ another-trade audit inventory
 another-trade audit sample-coverage
 ```
 
-`sample-coverage` is intentionally not a bulk downloader. It performs only three small 1m Kline probes plus one bounded funding probe per currently eligible symbol. Review `artifacts/data-audit/coverage-summary.json` before implementing any full-history download.
+`sample-coverage` is intentionally not a bulk downloader. It derives `first_trade_ms`, performs aligned control probes (including a pre-launch lifetime-conflict probe) plus one bounded funding probe, checkpoints each symbol to JSONL, and writes a run manifest. Review the run-specific `coverage-summary.json` before implementing any full-history download.
 
 GitHub-hosted runners currently execute from a Bybit-restricted U.S. region, so CI validates code without requiring network access to Bybit. Real fixtures and the first sample-coverage run must be captured from an allowed network.
