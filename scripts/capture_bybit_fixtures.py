@@ -9,14 +9,26 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-CANDIDATE_BASE_URLS = [\n    "https://api.bybit.eu",\n    "https://api.bytick.com",\n    "https://api-testnet.bybit.com",\n    "https://api.bybit.com",\n]\nBASE_URL = ""
+CANDIDATE_BASE_URLS = [
+    "https://api.bybit.eu",
+    "https://api.bytick.com",
+    "https://api-testnet.bybit.com",
+    "https://api.bybit.com",
+]
+BASE_URL = ""
 OUT = Path("tests/fixtures/bybit")
 USER_AGENT = "another-trade-data-audit/0.1 fixture-capture"
 
 
-def request(path: str, params: dict[str, Any]) -> tuple[bytes, int, str]:
+def request(
+    path: str,
+    params: dict[str, Any],
+    *,
+    base_url: str | None = None,
+) -> tuple[bytes, int, str]:
     query = urllib.parse.urlencode(params)
-    url = f"{BASE_URL}{path}?{query}"
+    root = base_url or BASE_URL
+    url = f"{root}{path}?{query}"
     req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     try:
         with urllib.request.urlopen(req, timeout=30) as response:
@@ -35,7 +47,49 @@ def decode(raw: bytes) -> dict[str, Any]:
     return value
 
 
-def store(name: str, raw: bytes, status: int, url: str, manifest: list[dict[str, Any]]) -> None:
+def require_ok(raw: bytes, label: str) -> dict[str, Any]:
+    payload = decode(raw)
+    if payload.get("retCode") != 0:
+        raise RuntimeError(
+            f"{label}: HTTP response contained retCode={payload.get('retCode')} "
+            f"retMsg={payload.get('retMsg')!r}"
+        )
+    return payload
+
+
+def select_base_url() -> str:
+    errors: list[str] = []
+    for base_url in CANDIDATE_BASE_URLS:
+        raw, status, _ = request(
+            "/v5/market/instruments-info",
+            {"category": "linear", "status": "Trading", "limit": 3},
+            base_url=base_url,
+        )
+        try:
+            payload = decode(raw)
+        except Exception as exc:
+            errors.append(
+                f"{base_url}: HTTP {status}, non-JSON: {raw[:160]!r} ({exc})"
+            )
+            continue
+        if status == 200 and payload.get("retCode") == 0:
+            return base_url
+        errors.append(
+            f"{base_url}: HTTP {status}, retCode={payload.get('retCode')} "
+            f"retMsg={payload.get('retMsg')!r}"
+        )
+    raise RuntimeError(
+        "No official Bybit endpoint reachable from runner:\n" + "\n".join(errors)
+    )
+
+
+def store(
+    name: str,
+    raw: bytes,
+    status: int,
+    url: str,
+    manifest: list[dict[str, Any]],
+) -> None:
     OUT.mkdir(parents=True, exist_ok=True)
     target = OUT / name
     target.write_bytes(raw)
@@ -51,17 +105,10 @@ def store(name: str, raw: bytes, status: int, url: str, manifest: list[dict[str,
     )
 
 
-def require_ok(raw: bytes, label: str) -> dict[str, Any]:
-    payload = decode(raw)
-    if payload.get("retCode") != 0:
-        raise RuntimeError(
-            f"{label}: HTTP response contained retCode={payload.get('retCode')} "
-            f"retMsg={payload.get('retMsg')!r}"
-        )
-    return payload
-
-
 def main() -> None:
+    global BASE_URL
+    BASE_URL = select_base_url()
+    print(f"Capturing fixtures from {BASE_URL}")
     manifest: list[dict[str, Any]] = []
 
     trading_raw, status, url = request(
@@ -87,7 +134,9 @@ def main() -> None:
         and item.get("settleCoin") == "USDT"
     ]
     if not candidates:
-        raise RuntimeError("Closed response contains no USDT LinearPerpetual fixture candidate")
+        raise RuntimeError(
+            f"{BASE_URL}: Closed response contains no USDT LinearPerpetual candidate"
+        )
 
     instrument = candidates[0]
     symbol = instrument["symbol"]
@@ -96,8 +145,6 @@ def main() -> None:
     if delivery_ms <= launch_ms:
         raise RuntimeError(f"{symbol}: invalid closed lifetime")
 
-    # Request a small immutable window shortly before delisting. It is intentionally
-    # a fixture capture, not a full-history download.
     kline_end = delivery_ms - 60_000
     kline_start = max(launch_ms, kline_end - 30 * 60_000)
     kline_raw, status, url = request(
@@ -126,7 +173,6 @@ def main() -> None:
     require_ok(funding_raw, f"{symbol} funding")
     store("funding_closed_symbol.json", funding_raw, status, url, manifest)
 
-    # A current-symbol kline fixture with only fully closed bars.
     now_ms = int(time.time() * 1000)
     safe_end = ((now_ms // 60_000) - 2) * 60_000
     safe_start = safe_end - 10 * 60_000
@@ -144,8 +190,6 @@ def main() -> None:
     require_ok(live_kline_raw, "BTCUSDT kline")
     store("kline_trading_symbol.json", live_kline_raw, status, url, manifest)
 
-    # Capture a genuine application-level error response. Bybit commonly reports
-    # API errors in JSON even when the HTTP request itself succeeds.
     error_raw, status, url = request(
         "/v5/market/kline",
         {
