@@ -93,10 +93,11 @@ Mark-price history is required around every funding event because Bybit computes
 
 Persist 1m mark-price OHLC. The exact convention for the funding timestamp is:
 
-- if an exact mark-price sample at the funding timestamp is available from an official source, use it;
-- otherwise use the close of the 1m Mark Price candle immediately preceding/equal to the funding timestamp according to Bybit timestamp semantics and flag `MARK_PRICE_1M_APPROX`.
+- primary value: OPEN of the 1m Mark Price candle with `startTime == fundingRateTimestamp`;
+- fallback: CLOSE of the immediately preceding complete 1m Mark Price candle, flagged `MARK_PRICE_1M_APPROX`;
+- if neither exists, affected trades cannot be parity-quality.
 
-The audit must quantify how often approximation is used.
+The audit must quantify how often fallback approximation is used and must test this convention on known funding timestamps.
 
 ### Bybit funding history
 
