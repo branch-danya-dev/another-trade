@@ -597,6 +597,13 @@ class BybitPublicClient:
 
         return guard
 
+    def _parse_funding_raw(self, raw: bytes) -> tuple[FundingItem, ...]:
+        try:
+            envelope = FundingEnvelope.model_validate(self._decode(raw))
+        except ValidationError as exc:
+            raise BybitApiError(-1, f"funding schema error: {exc}") from exc
+        return tuple(envelope.result.list)
+
     def funding_page_with_raw(
         self,
         *,
@@ -624,12 +631,8 @@ class BybitPublicClient:
             cacheable=end_ms < immutable_before,
             cache_guard=self._funding_cache_guard(now_value),
         )
-        try:
-            envelope = FundingEnvelope.model_validate(self._decode(raw))
-        except ValidationError as exc:
-            raise BybitApiError(-1, f"funding schema error: {exc}") from exc
         return RawFundingPage(
-            items=tuple(envelope.result.list),
+            items=self._parse_funding_raw(raw),
             raw=raw,
             endpoint="/v5/market/funding/history",
             params=params,
