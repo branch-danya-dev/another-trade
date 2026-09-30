@@ -4,7 +4,7 @@ Status: **RESEARCH / PRE-LIVE GATE**
 
 Last factual review: **2026-09-30**
 
-This document is not part of the trading edge and does not change strategy v0.2.1. It exists because a technically valid bot is not deployable if account access, funding/withdrawal, residency rules, tax/reporting obligations, or exchange terms make live operation unreliable.
+This document is not part of the trading edge and does not change strategy v0.2.2. It exists because a technically valid bot is not deployable if account access, funding/withdrawal, residency rules, tax/reporting obligations, or exchange terms make live operation unreliable.
 
 This is an engineering/compliance checklist, not legal or tax advice. Before real-money deployment, current rules must be re-verified and, where material, confirmed with a qualified Russian legal/tax professional.
 
