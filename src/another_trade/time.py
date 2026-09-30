@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime, time, timezone
+from datetime import UTC, date, datetime, time
 from zoneinfo import ZoneInfo
 
-UTC = timezone.utc
 AMSTERDAM = ZoneInfo("Europe/Amsterdam")
 NEW_YORK = ZoneInfo("America/New_York")
 

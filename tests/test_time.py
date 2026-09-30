@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 
 from another_trade.time import close_time_ms, europe_session, universe_cutoff_ms, us_session
 
 
 def test_close_time_is_exclusive_end_without_minus_one_ms() -> None:
-    start = int(datetime(2026, 3, 20, 8, 45, tzinfo=timezone.utc).timestamp() * 1000)
+    start = int(datetime(2026, 3, 20, 8, 45, tzinfo=UTC).timestamp() * 1000)
     assert close_time_ms(start, "15") == start + 15 * 60_000
 
 

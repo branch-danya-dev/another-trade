@@ -30,7 +30,7 @@ def test_cache_verifies_raw_body_hash(tmp_path: Path) -> None:
     cached = cache.put(key=key, raw=b'{"ok":true}', request_metadata={"a": 1})
     assert cache.get(key) == cached
 
-    body, _ = cache._paths(key)  # noqa: SLF001
+    body, _ = cache._paths(key)
     body.write_bytes(b"tampered")
     with pytest.raises(RuntimeError, match="cache corruption"):
         cache.get(key)

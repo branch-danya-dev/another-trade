@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import json
 import time
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from decimal import Decimal
+from itertools import pairwise
 from pathlib import Path
-from typing import Any, Callable, Mapping
+from typing import Any
 
 import httpx
 from pydantic import ValidationError
@@ -64,7 +66,7 @@ class BybitPublicClient:
     def close(self) -> None:
         self.http.close()
 
-    def __enter__(self) -> "BybitPublicClient":
+    def __enter__(self) -> BybitPublicClient:
         return self
 
     def __exit__(self, *_: object) -> None:
@@ -275,7 +277,7 @@ class BybitPublicClient:
     @staticmethod
     def _gaps(candles: tuple[Kline, ...], step_ms: int) -> tuple[tuple[int, int], ...]:
         gaps: list[tuple[int, int]] = []
-        for previous, current in zip(candles, candles[1:]):
+        for previous, current in pairwise(candles):
             expected = previous.start_ms + step_ms
             if current.start_ms != expected:
                 gaps.append((expected, current.start_ms))

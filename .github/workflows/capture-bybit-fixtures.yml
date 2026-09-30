@@ -2,10 +2,6 @@ name: capture-bybit-real-fixtures
 
 on:
   workflow_dispatch:
-  push:
-    paths:
-      - ".github/workflows/capture-bybit-fixtures.yml"
-      - "scripts/capture_bybit_fixtures.py"
 
 permissions:
   contents: write

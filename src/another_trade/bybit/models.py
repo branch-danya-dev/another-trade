@@ -90,7 +90,7 @@ class FundingEnvelope(StrictModel):
 
 
 class Kline:
-    __slots__ = ("start_ms", "open", "high", "low", "close", "volume", "turnover")
+    __slots__ = ("close", "high", "low", "open", "start_ms", "turnover", "volume")
 
     def __init__(self, row: list[str]) -> None:
         if len(row) < 7:

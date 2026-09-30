@@ -107,6 +107,6 @@ def test_retcode_10006_retries_even_with_http_200() -> None:
 
 
 def test_json_numeric_float_is_decoded_as_decimal() -> None:
-    payload = BybitPublicClient._decode(b'{"retCode":0,"retMsg":"OK","x":0.1}')  # noqa: SLF001
+    payload = BybitPublicClient._decode(b'{"retCode":0,"retMsg":"OK","x":0.1}')
     assert payload["x"] == Decimal("0.1")
     assert not isinstance(payload["x"], float)

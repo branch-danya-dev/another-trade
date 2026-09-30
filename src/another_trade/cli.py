@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Annotated
 
 import typer
 
@@ -15,8 +16,8 @@ app.add_typer(audit_app, name="audit")
 
 @audit_app.command("inventory")
 def inventory(
-    artifact_dir: Path = typer.Option(Path("artifacts/data-audit")),
-    cache_dir: Path = typer.Option(Path(".cache/bybit")),
+    artifact_dir: Annotated[Path, typer.Option()] = Path("artifacts/data-audit"),
+    cache_dir: Annotated[Path, typer.Option()] = Path(".cache/bybit"),
 ) -> None:
     with BybitPublicClient(cache_dir=cache_dir) as client:
         snapshot = collect_inventory(client)
@@ -30,13 +31,15 @@ def inventory(
 
 @audit_app.command("sample-coverage")
 def coverage(
-    artifact_dir: Path = typer.Option(Path("artifacts/data-audit")),
-    cache_dir: Path = typer.Option(Path(".cache/bybit")),
-    max_symbols: int | None = typer.Option(
-        None,
-        min=1,
-        help="Safety cap. Milestone 1 performs only three small kline probes per symbol.",
-    ),
+    artifact_dir: Annotated[Path, typer.Option()] = Path("artifacts/data-audit"),
+    cache_dir: Annotated[Path, typer.Option()] = Path(".cache/bybit"),
+    max_symbols: Annotated[
+        int | None,
+        typer.Option(
+            min=1,
+            help="Safety cap. Milestone 1 performs only three small kline probes per symbol.",
+        ),
+    ] = None,
 ) -> None:
     with BybitPublicClient(cache_dir=cache_dir) as client:
         snapshot = collect_inventory(client)
