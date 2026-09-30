@@ -87,7 +87,7 @@ def fetch_instruments(status_name: str, limit: int = 1000) -> tuple[bytes, dict[
 def main() -> None:
     manifest: list[dict[str, Any]] = []
 
-    trading_raw, trading, trading_url = fetch_instruments("Trading", 100)
+    trading_raw, _trading, trading_url = fetch_instruments("Trading", 100)
     store("instruments_trading.json", trading_raw, 200, trading_url, manifest)
 
     closed_raw, closed, closed_url = fetch_instruments("Closed", 1000)
