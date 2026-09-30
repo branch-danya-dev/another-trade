@@ -20,6 +20,13 @@ from another_trade.time import align_down_ms
 
 MINUTE_MS = 60_000
 DAY_MS = 86_400_000
+LAUNCH_PLACEHOLDER_THRESHOLD_MS = 365 * DAY_MS
+
+
+class LaunchTimeQuality(StrEnum):
+    OBSERVED_METADATA = "OBSERVED_METADATA"
+    PLACEHOLDER_SUSPECTED = "LAUNCH_TIME_PLACEHOLDER"
+    UNKNOWN = "UNKNOWN"
 
 
 class ProbeClassification(StrEnum):
@@ -73,12 +80,25 @@ class SymbolCoverage:
     symbol_type: str
     eligible_now: bool
     launch_ms: int
+    launch_time_quality: LaunchTimeQuality
     first_trade_ms: int | None
     launch_to_first_trade_ms: int | None
     delivery_ms: int
     lifetime_metadata_conflict: bool
     kline_probes: tuple[ProbeResult, ...]
     funding_probe: FundingProbeResult
+
+
+def _launch_time_quality(
+    *,
+    launch_ms: int,
+    first_trade_ms: int | None,
+) -> LaunchTimeQuality:
+    if first_trade_ms is None:
+        return LaunchTimeQuality.UNKNOWN
+    if first_trade_ms - launch_ms >= LAUNCH_PLACEHOLDER_THRESHOLD_MS:
+        return LaunchTimeQuality.PLACEHOLDER_SUSPECTED
+    return LaunchTimeQuality.OBSERVED_METADATA
 
 
 def _funding_is_applicable(instrument: Instrument) -> bool:
@@ -528,6 +548,10 @@ def probe_symbol(
         symbol_type=instrument.symbolType,
         eligible_now=currently_eligible_crypto_perpetual(instrument),
         launch_ms=launch,
+        launch_time_quality=_launch_time_quality(
+            launch_ms=launch,
+            first_trade_ms=first_trade_ms,
+        ),
         first_trade_ms=first_trade_ms,
         launch_to_first_trade_ms=(
             first_trade_ms - launch if first_trade_ms is not None else None
@@ -586,6 +610,7 @@ def load_jsonl_results(path: Path) -> list[SymbolCoverage]:
             SymbolCoverage(
                 **{
                     **row,
+                    "launch_time_quality": LaunchTimeQuality(row["launch_time_quality"]),
                     "kline_probes": probes,
                     "funding_probe": funding,
                 }
@@ -623,6 +648,7 @@ def run_sample_coverage(
                 symbol_type=instrument.symbolType,
                 eligible_now=currently_eligible_crypto_perpetual(instrument),
                 launch_ms=int(instrument.launchTime),
+                launch_time_quality=LaunchTimeQuality.UNKNOWN,
                 first_trade_ms=None,
                 launch_to_first_trade_ms=None,
                 delivery_ms=int(instrument.deliveryTime or 0),
@@ -662,6 +688,7 @@ def write_coverage(results: tuple[SymbolCoverage, ...], directory: Path) -> None
                 "status",
                 "symbol_type",
                 "first_trade_ms",
+                "launch_time_quality",
                 "launch_to_first_trade_ms",
                 "checkpoint",
                 "classification",
@@ -685,6 +712,7 @@ def write_coverage(results: tuple[SymbolCoverage, ...], directory: Path) -> None
                         result.status,
                         result.symbol_type,
                         result.first_trade_ms or "",
+                        result.launch_time_quality,
                         result.launch_to_first_trade_ms or "",
                         probe.checkpoint,
                         probe.classification,
@@ -702,10 +730,26 @@ def write_coverage(results: tuple[SymbolCoverage, ...], directory: Path) -> None
                 )
     os.replace(tmp, csv_path)
 
+    all_delays = [
+        result.launch_to_first_trade_ms
+        for result in results
+        if result.launch_to_first_trade_ms is not None
+    ]
     delays = [
         result.launch_to_first_trade_ms
         for result in results
         if result.launch_to_first_trade_ms is not None
+        and result.launch_time_quality is not LaunchTimeQuality.PLACEHOLDER_SUSPECTED
+    ]
+    placeholder_symbols = [
+        {
+            "symbol": result.symbol,
+            "launch_ms": result.launch_ms,
+            "first_trade_ms": result.first_trade_ms,
+            "raw_delay_ms": result.launch_to_first_trade_ms,
+        }
+        for result in results
+        if result.launch_time_quality is LaunchTimeQuality.PLACEHOLDER_SUSPECTED
     ]
     summary = {
         "symbols": len(results),
@@ -722,7 +766,13 @@ def write_coverage(results: tuple[SymbolCoverage, ...], directory: Path) -> None
             item.lifetime_metadata_conflict for item in results
         ),
         "first_trade_found": sum(item.first_trade_ms is not None for item in results),
-        "launch_delay_ms": {
+        "launch_time_placeholders": placeholder_symbols,
+        "launch_delay_all_ms": {
+            "count": len(all_delays),
+            "min": min(all_delays) if all_delays else None,
+            "max": max(all_delays) if all_delays else None,
+        },
+        "launch_delay_non_placeholder_ms": {
             "count": len(delays),
             "min": min(delays) if delays else None,
             "max": max(delays) if delays else None,
