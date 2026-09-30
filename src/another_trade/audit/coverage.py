@@ -485,7 +485,7 @@ def probe_symbol(
         )
     else:
         try:
-                events = client.funding_page(
+            events = client.funding_page(
                 symbol=instrument.symbol,
                 start_ms=funding_start,
                 end_ms=funding_end,
