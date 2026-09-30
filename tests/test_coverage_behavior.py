@@ -55,6 +55,7 @@ def test_jsonl_checkpoint_round_trip(tmp_path: Path) -> None:
         "symbol_type": "",
         "eligible_now": True,
         "launch_ms": 1,
+        "launch_time_quality": "OBSERVED_METADATA",
         "first_trade_ms": 2,
         "launch_to_first_trade_ms": 1,
         "delivery_ms": 0,
