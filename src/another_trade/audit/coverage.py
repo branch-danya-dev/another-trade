@@ -33,6 +33,7 @@ class ProbeClassification(StrEnum):
     FIRST_TRADE_NOT_FOUND = "FIRST_TRADE_NOT_FOUND"
     API_ERROR = "API_ERROR"
     INTERNAL_ERROR = "INTERNAL_ERROR"
+    NOT_APPLICABLE = "NOT_APPLICABLE"
 
 
 @dataclass(frozen=True, slots=True)
@@ -221,10 +222,11 @@ def discover_first_trade_ms(
     *,
     now_ms: int,
 ) -> int | None:
-    """Find the first observed trade minute with at most 3 small requests.
+    """Find the first observed trade minute without trusting launchTime.
 
-    1 daily request scans the first <=1000 days after launch-day metadata,
-    then at most two 12-hour 1m windows locate the first exact minute.
+    Daily history is scanned forward in aligned chunks of at most 1000 days until
+    the first non-empty chunk is found or the instrument lifetime ends. Then at
+    most two 12-hour 1m windows locate the exact first observed minute.
     """
     launch = int(instrument.launchTime)
     delivery = int(instrument.deliveryTime or 0)
@@ -232,23 +234,28 @@ def discover_first_trade_ms(
     if effective_end <= 0:
         return None
 
-    day_start = align_down_ms(launch, "D")
-    search_end = min(
-        align_down_ms(max(day_start, effective_end - 1), "D"),
-        day_start + 999 * DAY_MS,
-    )
-    daily = client.kline_page(
-        symbol=instrument.symbol,
-        start_ms=day_start,
-        end_ms=search_end,
-        interval="D",
-        limit=1000,
-        now_ms=now_ms,
-    )
-    if not daily.candles:
+    final_day = align_down_ms(max(0, effective_end - 1), "D")
+    chunk_start = align_down_ms(max(0, launch), "D")
+    first_day: int | None = None
+
+    while chunk_start <= final_day:
+        chunk_end = min(final_day, chunk_start + 999 * DAY_MS)
+        daily = client.kline_page(
+            symbol=instrument.symbol,
+            start_ms=chunk_start,
+            end_ms=chunk_end,
+            interval="D",
+            limit=1000,
+            now_ms=now_ms,
+        )
+        if daily.candles:
+            first_day = daily.candles[0].start_ms
+            break
+        chunk_start = chunk_end + DAY_MS
+
+    if first_day is None:
         return None
 
-    first_day = daily.candles[0].start_ms
     last_allowed = align_down_ms(max(first_day, effective_end - 1), "1")
     halves = (
         (first_day, min(first_day + 719 * MINUTE_MS, last_allowed)),
@@ -268,6 +275,57 @@ def discover_first_trade_ms(
         if page.candles:
             return page.candles[0].start_ms
     return None
+
+
+def _prelaunch_history_probe(
+    client: BybitPublicClient,
+    instrument: Instrument,
+    *,
+    now_ms: int,
+) -> ProbeResult:
+    """Search up to 1000 complete UTC days before the launch day for hidden history."""
+    launch = int(instrument.launchTime)
+    launch_day = align_down_ms(max(0, launch), "D")
+    end_ms = launch_day - DAY_MS
+    if end_ms < 0:
+        start_ms = 0
+        end_ms = 0
+        candles: tuple[object, ...] = ()
+    else:
+        start_ms = max(0, end_ms - 999 * DAY_MS)
+        page = client.kline_page(
+            symbol=instrument.symbol,
+            start_ms=start_ms,
+            end_ms=end_ms,
+            interval="D",
+            limit=1000,
+            now_ms=now_ms,
+        )
+        candles = page.candles
+
+    classification = (
+        ProbeClassification.LIFETIME_METADATA_CONFLICT
+        if candles
+        else ProbeClassification.BEFORE_LAUNCH
+    )
+    return ProbeResult(
+        symbol=instrument.symbol,
+        status=instrument.status,
+        checkpoint="pre_launch_1000d",
+        checkpoint_ms=launch_day,
+        window_start_ms=start_ms,
+        window_end_ms=end_ms,
+        classification=classification,
+        expected_count=0,
+        candle_count=len(candles),
+        coverage_pct="0.000",
+        missing_expected_count=0,
+        missing_at_start=False,
+        missing_at_end=False,
+        gap_count=0,
+        duplicate_start_times=0,
+        unfinished_filtered=0,
+    )
 
 
 def _single_probe(
@@ -328,21 +386,17 @@ def probe_symbol(
 
     probes: list[ProbeResult] = []
 
-    prelaunch_point = align_down_ms(max(0, launch - 30 * DAY_MS), "1")
-    prelaunch = _single_probe(
-        client,
-        instrument,
-        label="pre_launch_30d",
-        point_ms=prelaunch_point,
-        now_ms=now_ms,
-        first_trade_ms=first_trade_ms,
-    )
-    if prelaunch.candle_count > 0:
-        prelaunch = ProbeResult(
-            **{
-                **asdict(prelaunch),
-                "classification": ProbeClassification.LIFETIME_METADATA_CONFLICT,
-            }
+    try:
+        prelaunch = _prelaunch_history_probe(client, instrument, now_ms=now_ms)
+    except Exception as exc:
+        prelaunch = _error_probe(
+            instrument,
+            label="pre_launch_1000d",
+            point_ms=align_down_ms(max(0, launch), "D"),
+            start_ms=max(0, align_down_ms(max(0, launch), "D") - 1000 * DAY_MS),
+            end_ms=max(0, align_down_ms(max(0, launch), "D") - DAY_MS),
+            classification=ProbeClassification.API_ERROR,
+            exc=exc,
         )
     probes.append(prelaunch)
 
@@ -405,41 +459,51 @@ def probe_symbol(
     funding_point = align_down_ms(origin + max(0, effective_end - origin) // 2, "1")
     funding_start = max(origin, funding_point - 4 * DAY_MS)
     funding_end = min(effective_end - 1, funding_point + 4 * DAY_MS)
-    try:
-        events = client.funding_page(
-            symbol=instrument.symbol,
-            start_ms=funding_start,
-            end_ms=funding_end,
-            limit=200,
-            now_ms=now_ms,
-        )
-        funding_class = (
-            ProbeClassification.DATA_PRESENT
-            if events
-            else classify_empty(
-                instrument,
-                funding_point,
-                first_trade_ms=first_trade_ms,
-            )
-        )
-        funding_probe = FundingProbeResult(
-            symbol=instrument.symbol,
-            checkpoint_ms=funding_point,
-            classification=funding_class,
-            event_count=len(events),
-        )
-    except Exception as exc:
-        funding_probe = FundingProbeResult(
-            symbol=instrument.symbol,
-            checkpoint_ms=funding_point,
-            classification=ProbeClassification.API_ERROR,
-            event_count=0,
-            error=f"{type(exc).__name__}: {exc}",
-        )
 
+    if instrument.contractType != "LinearPerpetual":
+        funding_probe = FundingProbeResult(
+            symbol=instrument.symbol,
+            checkpoint_ms=funding_point,
+            classification=ProbeClassification.NOT_APPLICABLE,
+            event_count=0,
+        )
+    else:
+        try:
+                events = client.funding_page(
+                symbol=instrument.symbol,
+                start_ms=funding_start,
+                end_ms=funding_end,
+                limit=200,
+                now_ms=now_ms,
+            )
+            funding_class = (
+                ProbeClassification.DATA_PRESENT
+                if events
+                else classify_empty(
+                    instrument,
+                    funding_point,
+                    first_trade_ms=first_trade_ms,
+                )
+            )
+            funding_probe = FundingProbeResult(
+                symbol=instrument.symbol,
+                checkpoint_ms=funding_point,
+                classification=funding_class,
+                event_count=len(events),
+            )
+        except Exception as exc:
+            funding_probe = FundingProbeResult(
+                symbol=instrument.symbol,
+                checkpoint_ms=funding_point,
+                classification=ProbeClassification.API_ERROR,
+                event_count=0,
+                error=f"{type(exc).__name__}: {exc}",
+            )
+
+    launch_minute = align_down_ms(max(0, launch), "1")
     metadata_conflict = (
-        first_trade_ms is not None and first_trade_ms < launch
-    ) or prelaunch.candle_count > 0
+        first_trade_ms is not None and first_trade_ms < launch_minute
+    ) or prelaunch.classification is ProbeClassification.LIFETIME_METADATA_CONFLICT
 
     return SymbolCoverage(
         symbol=instrument.symbol,
@@ -467,7 +531,8 @@ def append_jsonl_fsync(path: Path, value: object) -> None:
     raw = (json.dumps(value, ensure_ascii=False, sort_keys=True, default=str) + "\n").encode(
         "utf-8"
     )
-    fd = os.open(path, os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o644)
+    flags = os.O_APPEND | os.O_CREAT | os.O_WRONLY | getattr(os, "O_BINARY", 0)
+    fd = os.open(path, flags, 0o644)
     try:
         os.write(fd, raw)
         os.fsync(fd)
@@ -573,7 +638,7 @@ def write_coverage(results: tuple[SymbolCoverage, ...], directory: Path) -> None
     csv_path = directory / "coverage-sample.csv"
     tmp = csv_path.with_suffix(".csv.tmp")
     with tmp.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.writer(handle)
+        writer = csv.writer(handle, lineterminator="\n")
         writer.writerow(
             [
                 "symbol",
