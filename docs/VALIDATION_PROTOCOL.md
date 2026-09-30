@@ -2,6 +2,6 @@
 
 Status: **SUPERSEDED**
 
-Canonical document: [VALIDATION_PROTOCOL_V0.2.3.md](VALIDATION_PROTOCOL_V0.2.3.md)
+Canonical document: [VALIDATION_PROTOCOL_V0.2.4.md](VALIDATION_PROTOCOL_V0.2.4.md)
 
 This unversioned path is retained only for compatibility with older links.

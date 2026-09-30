@@ -19,8 +19,8 @@ The first goal is not to prove profitability. The first goal is to build a repro
 ## Documents
 
 - [Trading specification v0.2.3](docs/SPEC_V0.2.3.md)
-- [Data Contract v0.1.4](docs/DATA_CONTRACT_V0.1.4.md)
-- [Validation protocol v0.2.3](docs/VALIDATION_PROTOCOL_V0.2.3.md)
+- [Data Contract v0.1.5](docs/DATA_CONTRACT_V0.1.5.md)
+- [Validation protocol v0.2.4](docs/VALIDATION_PROTOCOL_V0.2.4.md)
 - [Live operations & compliance gate](docs/LIVE_OPERATIONS_AND_COMPLIANCE.md)
 - [Archived specification v0.2.1](docs/SPEC_V0.2.1.md)
 - [Archived specification v0.2](docs/SPEC_V0.2.md)
@@ -82,7 +82,7 @@ Planned data classes:
 - official U.S. CPI and Employment Situation release schedules from BLS;
 - FOMC meeting / statement calendar from the Federal Reserve.
 
-See [docs/DATA_CONTRACT_V0.1.4.md](docs/DATA_CONTRACT_V0.1.4.md) for the audit requirements and known limitations.
+See [docs/DATA_CONTRACT_V0.1.5.md](docs/DATA_CONTRACT_V0.1.5.md) for the audit requirements and known limitations.
 
 
 ## Data Audit milestone 1
