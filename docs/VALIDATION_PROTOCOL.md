@@ -2,7 +2,7 @@
 
 Status: **PRE-REGISTERED**
 
-This document defines when strategy v0.2 is considered PASS, FAIL, or INCONCLUSIVE.
+This document defines when strategy v0.2.1 is considered PASS, FAIL, or INCONCLUSIVE.
 
 The purpose is to prevent repeated historical testing from turning validation data into another development set.
 
@@ -43,7 +43,7 @@ Any strategy rule may change while only development data have been inspected, bu
 
 Validation may be opened only after:
 
-- SPEC_V0.2 is frozen;
+- SPEC_V0.2.1 is frozen;
 - Data Contract audit is complete enough for the tested universe;
 - Decision Cost Model and execution models are frozen;
 - baseline and robustness neighbors are frozen;
@@ -80,13 +80,13 @@ The end is deliberately the last fully completed UTC day before this protocol wa
 
 Final holdout must not be queried for strategy PnL, setup counts, parameter comparisons, or trade-level inspection before the validation gate passes.
 
-If v0.2 changes after final holdout is opened, the project has no remaining clean historical holdout for the new version.
+If v0.2.1 changes after final holdout is opened, the project has no remaining clean historical holdout for the new version.
 
 ---
 
 ## 2. Baseline parameters
 
-Frozen v0.2 baseline:
+Frozen v0.2.1 baseline:
 
 ```text
 EMA period                 50
@@ -143,7 +143,7 @@ No new neighbor may be added after validation results are visible.
 
 ## 4. Development funnel gate
 
-Before opening validation, produce the funnel defined in SPEC_V0.2.
+Before opening validation, produce the funnel defined in SPEC_V0.2.1.
 
 Mandatory additional estimate:
 
@@ -157,7 +157,7 @@ The projection must be mechanical and clearly labeled as a rough sample-size est
 If projected combined OOS N is below 200, there are only two acceptable choices before opening validation:
 
 1. redesign/version the strategy using development data only; or
-2. freeze v0.2 unchanged and explicitly accept that the historical result is likely to become INCONCLUSIVE.
+2. freeze v0.2.1 unchanged and explicitly accept that the historical result is likely to become INCONCLUSIVE.
 
 It is forbidden to open validation, discover insufficient N, then loosen filters to manufacture more trades under the same version.
 
