@@ -203,7 +203,7 @@ class RawPageStore:
         path.parent.mkdir(parents=True, exist_ok=True)
         self.path = path
         self.conn = sqlite3.connect(path)
-        self.conn.execute("PRAGMA journal_mode=WAL")
+        self.conn.execute("PRAGMA journal_mode=DELETE")
         self.conn.execute("PRAGMA synchronous=FULL")
         self.conn.execute(
             """
@@ -553,6 +553,32 @@ def _sample_funding_timestamps(items: Sequence[int], limit: int = 5) -> list[int
     return [ordered[index] for index in sorted(indexes)]
 
 
+def _funding_events_for_month(
+    client: BybitPublicClient,
+    *,
+    symbol: str,
+    bounds: MonthBounds,
+    now_ms: int,
+) -> list[object]:
+    events_by_identity: dict[tuple[str, str, str], object] = {}
+    cursor = bounds.start_ms
+    chunk_ms = 7 * DAY_MS
+    while cursor < bounds.end_ms:
+        chunk_end = min(bounds.end_ms - 1, cursor + chunk_ms - 1)
+        items = client.funding_page(
+            symbol=symbol,
+            start_ms=cursor,
+            end_ms=chunk_end,
+            limit=200,
+            now_ms=now_ms,
+        )
+        for item in items:
+            key = (item.symbol, item.fundingRateTimestamp, item.fundingRate)
+            events_by_identity[key] = item
+        cursor = chunk_end + 1
+    return list(events_by_identity.values())
+
+
 def compare_mark_price_funding_opens(
     client: BybitPublicClient,
     *,
@@ -560,17 +586,18 @@ def compare_mark_price_funding_opens(
     bounds: MonthBounds,
     now_ms: int,
 ) -> dict[str, object]:
-    funding = client.funding_page(
+    funding = _funding_events_for_month(
+        client,
         symbol=symbol,
-        start_ms=bounds.start_ms,
-        end_ms=bounds.end_ms - 1,
-        limit=200,
+        bounds=bounds,
         now_ms=now_ms,
     )
     timestamps = [
-        int(item.fundingRateTimestamp)
+        int(item.fundingRateTimestamp)  # type: ignore[attr-defined]
         for item in funding
-        if bounds.start_ms <= int(item.fundingRateTimestamp) < bounds.end_ms
+        if bounds.start_ms
+        <= int(item.fundingRateTimestamp)  # type: ignore[attr-defined]
+        < bounds.end_ms
     ]
     aligned = [timestamp for timestamp in timestamps if timestamp % HOUR_MS == 0]
 
