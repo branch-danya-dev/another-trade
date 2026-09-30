@@ -2,7 +2,7 @@
 
 Status: **PRE-REGISTERED**
 
-This document defines when strategy v0.2.4 is considered PASS, FAIL, or INCONCLUSIVE.
+This document defines when strategy v0.2.3 is considered PASS, FAIL, or INCONCLUSIVE.
 
 The purpose is to prevent repeated historical testing from turning validation data into another development set.
 
@@ -81,13 +81,13 @@ The end is deliberately the last fully completed UTC day before this protocol wa
 
 Final holdout must not be queried for strategy PnL, setup counts, parameter comparisons, or trade-level inspection before the validation gate passes.
 
-If v0.2.4 changes after final holdout is opened, the project has no remaining clean historical holdout for the new version.
+If v0.2.3 changes after final holdout is opened, the project has no remaining clean historical holdout for the new version.
 
 ---
 
 ## 2. Baseline parameters
 
-Frozen v0.2.4 baseline:
+Frozen v0.2.3 baseline:
 
 ```text
 EMA period                 50
@@ -169,7 +169,7 @@ The projection must be mechanical and clearly labeled as a rough sample-size est
 If projected combined OOS N is below 200, there are only two acceptable choices before opening validation:
 
 1. redesign/version the strategy using development data only; or
-2. freeze v0.2.4 unchanged and explicitly accept that the historical result is likely to become INCONCLUSIVE.
+2. freeze v0.2.3 unchanged and explicitly accept that the historical result is likely to become INCONCLUSIVE.
 
 It is forbidden to open validation, discover insufficient N, then loosen filters to manufacture more trades under the same version.
 
@@ -193,7 +193,7 @@ Validation gate passes only if all of the following are true:
 
 BASE/STRESS/SEVERE must consume the same canonical decisions, quantities, fills/triggers, and trade membership. Scenario PnL may not feed back into later strategy decisions.
 
-If any mandatory baseline or stress point estimate is negative/non-positive where the condition above requires strict positivity/non-negativity, v0.2.4 is **FAIL_VALIDATION** and final holdout stays sealed.
+If any mandatory baseline or stress point estimate is negative/non-positive where the condition above requires strict positivity/non-negativity, v0.2.3 is **FAIL_VALIDATION** and final holdout stays sealed.
 
 If all required point-estimate conditions pass but `N_2025 < 100`, the result is **INCONCLUSIVE_VALIDATION** and final holdout stays sealed.
 
@@ -298,7 +298,7 @@ The exact bootstrap implementation, seed, and library versions must be stored wi
 
 ## 9. Final PASS
 
-v0.2.4 receives historical **PASS** only if all conditions below are true:
+v0.2.3 receives historical **PASS** only if all conditions below are true:
 
 ### Sample size
 
@@ -365,7 +365,7 @@ Examples:
 - robustness gate < 8/10 positive neighbors;
 - material data bias invalidates the test and cannot be repaired without changing the evaluated sample.
 
-After FAIL, do not tweak v0.2.4 and rerun the same OOS as if it were unseen.
+After FAIL, do not tweak v0.2.3 and rerun the same OOS as if it were unseen.
 
 Any redesigned strategy becomes a new version.
 
