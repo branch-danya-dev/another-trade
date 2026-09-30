@@ -1,6 +1,6 @@
 # Trading Specification v0.2.1
 
-Status: **FROZEN FOR IMPLEMENTATION**
+Status: **SUPERSEDED BY [v0.2.2](SPEC_V0.2.2.md) BEFORE VALIDATION OPENED**
 
 Supersedes v0.2 before validation was opened. v0.2 remains archived for traceability.
 
