@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from enum import StrEnum
 from pathlib import Path
+from typing import cast
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -26,14 +27,21 @@ DAY_MS = 86_400_000
 RAW_SCHEMA_VERSION = 1
 PARQUET_SCHEMA_VERSION = 1
 DECIMAL_TYPE = pa.decimal128(38, 18)
+PARQUET_COMPRESSION = "zstd"
+PARQUET_COMPRESSION_LEVEL = 9
+PARQUET_USE_DICTIONARY = False
+PARQUET_WRITE_STATISTICS = True
+PARQUET_ROW_GROUP_SIZE = 65_536
+PARQUET_DATA_PAGE_VERSION = "2.0"
+PARQUET_VERSION = "2.6"
 PARQUET_WRITER_CONFIG: dict[str, object] = {
-    "compression": "zstd",
-    "compression_level": 9,
-    "use_dictionary": False,
-    "write_statistics": True,
-    "row_group_size": 65_536,
-    "data_page_version": "2.0",
-    "version": "2.6",
+    "compression": PARQUET_COMPRESSION,
+    "compression_level": PARQUET_COMPRESSION_LEVEL,
+    "use_dictionary": PARQUET_USE_DICTIONARY,
+    "write_statistics": PARQUET_WRITE_STATISTICS,
+    "row_group_size": PARQUET_ROW_GROUP_SIZE,
+    "data_page_version": PARQUET_DATA_PAGE_VERSION,
+    "version": PARQUET_VERSION,
 }
 
 
@@ -405,13 +413,13 @@ def write_partition_parquet(
     pq.write_table(
         table,
         tmp,
-        compression=str(PARQUET_WRITER_CONFIG["compression"]),
-        compression_level=int(PARQUET_WRITER_CONFIG["compression_level"]),
-        use_dictionary=bool(PARQUET_WRITER_CONFIG["use_dictionary"]),
-        write_statistics=bool(PARQUET_WRITER_CONFIG["write_statistics"]),
-        row_group_size=int(PARQUET_WRITER_CONFIG["row_group_size"]),
-        data_page_version=str(PARQUET_WRITER_CONFIG["data_page_version"]),
-        version=str(PARQUET_WRITER_CONFIG["version"]),
+        compression=PARQUET_COMPRESSION,
+        compression_level=PARQUET_COMPRESSION_LEVEL,
+        use_dictionary=PARQUET_USE_DICTIONARY,
+        write_statistics=PARQUET_WRITE_STATISTICS,
+        row_group_size=PARQUET_ROW_GROUP_SIZE,
+        data_page_version=PARQUET_DATA_PAGE_VERSION,
+        version=PARQUET_VERSION,
     )
     tmp.replace(path)
     file_hash = hashlib.sha256(path.read_bytes()).hexdigest()
@@ -726,6 +734,24 @@ def pilot_symbol_diagnostics(
     }
 
 
+def _require_int(value: object, *, name: str) -> int:
+    if type(value) is not int:
+        raise TypeError(f"{name} must be int, got {type(value)!r}")
+    return cast(int, value)
+
+
+def _require_dict(value: object, *, name: str) -> dict[str, object]:
+    if not isinstance(value, dict):
+        raise TypeError(f"{name} must be dict, got {type(value)!r}")
+    return cast(dict[str, object], value)
+
+
+def _require_dict_list(value: object, *, name: str) -> list[dict[str, object]]:
+    if not isinstance(value, list) or not all(isinstance(item, dict) for item in value):
+        raise TypeError(f"{name} must be list[dict]")
+    return cast(list[dict[str, object]], value)
+
+
 def write_pilot_summary(
     *,
     run_dir: Path,
@@ -741,19 +767,30 @@ def write_pilot_summary(
         "total_missing_minutes": sum(artifact.missing_minutes for artifact in artifacts),
         "resumed": resumed,
         "aggregation_mismatch_count": sum(
-            int(item["mismatch_count"])
+            _require_int(item["mismatch_count"], name="mismatch_count")
             for diagnostic in diagnostics
-            for item in diagnostic["aggregation"]  # type: ignore[index]
+            for item in _require_dict_list(
+                diagnostic["aggregation"],
+                name="aggregation",
+            )
         ),
         "mark_price_sample_count": sum(
-            int(
-                diagnostic["mark_price_funding_open_comparison"]["sample_count"]  # type: ignore[index]
+            _require_int(
+                _require_dict(
+                    diagnostic["mark_price_funding_open_comparison"],
+                    name="mark_price_funding_open_comparison",
+                )["sample_count"],
+                name="sample_count",
             )
             for diagnostic in diagnostics
         ),
         "mark_price_equal_count": sum(
-            int(
-                diagnostic["mark_price_funding_open_comparison"]["equal_count"]  # type: ignore[index]
+            _require_int(
+                _require_dict(
+                    diagnostic["mark_price_funding_open_comparison"],
+                    name="mark_price_funding_open_comparison",
+                )["equal_count"],
+                name="equal_count",
             )
             for diagnostic in diagnostics
         ),
