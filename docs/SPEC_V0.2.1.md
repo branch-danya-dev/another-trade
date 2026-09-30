@@ -946,7 +946,13 @@ funding_fee = quantity * mark_price_at_funding * funding_rate
 
 Use Bybit historical Mark Price data, not Last Price, for the position-value term. The Data Contract requires 1m mark-price history around funding events.
 
-If exact tick-level mark price at the funding timestamp is unavailable, use the 1m Mark Price candle value defined by the Data Contract and flag the approximation explicitly.
+Historical mark-price convention:
+
+1. use the OPEN of the 1m Mark Price candle whose startTime equals fundingRateTimestamp;
+2. if that candle is unavailable, use the CLOSE of the immediately preceding complete 1m Mark Price candle and flag MARK_PRICE_1M_APPROX;
+3. if neither value is available, the affected trade is not parity-quality.
+
+If funding eligibility is intraminute-ambiguous at the settlement boundary, apply a pessimistic rule: include the event when it is a payment by the strategy position, but do not credit it when it would be a receipt. Live actual funding is reconciled from exchange transaction records.
 
 Funding contributes to realized net PnL and reported net R.
 
