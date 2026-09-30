@@ -13,14 +13,21 @@ import typer
 from another_trade.audit.bulk_pilot import (
     PARQUET_WRITER_CONFIG,
     PilotAbort,
+    compare_pilot_runs,
     download_symbol_month,
     instrument_covers_month,
+    mark_price_only_diagnostics,
     parse_month,
     pilot_symbol_diagnostics,
     select_default_pilot_symbols,
+    select_fast_funding_symbols,
     write_pilot_summary,
 )
-from another_trade.audit.coverage import run_sample_coverage, write_coverage
+from another_trade.audit.coverage import (
+    discover_first_trade_ms,
+    run_sample_coverage,
+    write_coverage,
+)
 from another_trade.audit.identity import load_identity_config
 from another_trade.audit.inventory import (
     collect_inventory,
@@ -29,6 +36,7 @@ from another_trade.audit.inventory import (
 )
 from another_trade.bybit.client import BybitPublicClient
 from another_trade.io import atomic_write_bytes
+from another_trade.time import align_down_ms
 
 SPEC_VERSION = "v0.2.5"
 DATA_CONTRACT_VERSION = "v0.1.8"
@@ -236,6 +244,12 @@ def bulk_pilot(
                 "spec_version": SPEC_VERSION,
                 "data_contract_version": DATA_CONTRACT_VERSION,
                 "selected_symbols": selected,
+                "mark_stress_symbols": select_fast_funding_symbols(
+                    snapshot,
+                    bounds,
+                    exclude=selected,
+                    count=2,
+                ),
                 "requests_per_second": client.requests_per_second,
                 "parquet_writer_config": PARQUET_WRITER_CONFIG,
                 "software_versions": {
@@ -338,6 +352,29 @@ def bulk_pilot(
                         ).encode("utf-8"),
                     )
                 diagnostics.append(diagnostic)
+
+            stress_diagnostics = []
+            for symbol in [str(item) for item in manifest.get("mark_stress_symbols", [])]:
+                stress_path = run_dir / "mark-stress-diagnostics" / f"{symbol}.json"
+                if stress_path.exists():
+                    stress = json.loads(stress_path.read_text(encoding="utf-8"))
+                else:
+                    stress = mark_price_only_diagnostics(
+                        client,
+                        symbol=symbol,
+                        bounds=bounds,
+                        run_dir=run_dir,
+                        now_ms=now_ms,
+                    )
+                    atomic_write_bytes(
+                        stress_path,
+                        json.dumps(stress, indent=2, sort_keys=True).encode("utf-8"),
+                    )
+                stress_diagnostics.append(stress)
+            atomic_write_bytes(
+                run_dir / "mark-stress-diagnostics.json",
+                json.dumps(stress_diagnostics, indent=2, sort_keys=True).encode("utf-8"),
+            )
         except PilotAbort as exc:
             manifest["status"] = "INTENTIONALLY_ABORTED"
             manifest["abort_message"] = str(exc)
@@ -365,6 +402,132 @@ def bulk_pilot(
     )
     typer.echo(f"bulk pilot complete: {run_dir}")
     typer.echo(f"symbols: {', '.join(selected)}")
+
+
+@audit_app.command("bulk-pilot-compare")
+def bulk_pilot_compare(
+    reference_run: Annotated[Path, typer.Option(help="Completed resumed pilot run.")],
+    candidate_run: Annotated[Path, typer.Option(help="Independent clean pilot run.")],
+) -> None:
+    comparison = compare_pilot_runs(reference_run, candidate_run)
+    output = candidate_run / "reproducibility-comparison.json"
+    atomic_write_bytes(
+        output,
+        json.dumps(comparison, indent=2, sort_keys=True).encode("utf-8"),
+    )
+    typer.echo(
+        "logical hashes equal: "
+        f"{comparison['all_logical_equal']}; "
+        f"parquet hashes equal: {comparison['all_parquet_equal']}"
+    )
+    typer.echo(f"written: {output}")
+    if not comparison["all_logical_equal"]:
+        raise typer.Exit(code=4)
+
+
+@audit_app.command("bulk-boundary-pilot")
+def bulk_boundary_pilot(
+    month: Annotated[str, typer.Option()] = "2024-09",
+    symbols: Annotated[str, typer.Option()] = "MATICUSDT,POLUSDT",
+    artifact_dir: Annotated[Path, typer.Option()] = Path("artifacts/data-audit"),
+) -> None:
+    bounds = parse_month(month)
+    development_end = parse_month("2025-01").start_ms
+    if bounds.end_ms > development_end:
+        raise typer.BadParameter("boundary pilot must remain inside development data")
+
+    selected = [item.strip().upper() for item in symbols.split(",") if item.strip()]
+    if len(selected) < 2:
+        raise typer.BadParameter("boundary pilot requires at least two symbols")
+
+    now_ms = time.time_ns() // 1_000_000
+    with BybitPublicClient(cache_dir=None) as client:
+        snapshot = collect_inventory(client)
+        by_symbol = {item.symbol: item for item in snapshot.instruments}
+        missing = [symbol for symbol in selected if symbol not in by_symbol]
+        if missing:
+            raise typer.BadParameter(f"symbols missing from inventory: {missing}")
+
+        run_id = f"{now_ms}-{bounds.label}-boundary-{snapshot.sha256[:12]}"
+        run_dir = artifact_dir / "bulk-boundary-pilot" / run_id
+        run_dir.mkdir(parents=True, exist_ok=False)
+
+        artifacts = []
+        lifetime_rows = []
+        for symbol in selected:
+            instrument = by_symbol[symbol]
+            if not currently_eligible_crypto_perpetual(instrument):
+                raise typer.BadParameter(f"{symbol} is not an eligible crypto perpetual")
+            first_trade_ms = discover_first_trade_ms(
+                client,
+                instrument,
+                now_ms=now_ms,
+            )
+            if first_trade_ms is None:
+                raise typer.BadParameter(f"first_trade_ms not found for {symbol}")
+
+            start_ms = max(bounds.start_ms, first_trade_ms)
+            delivery_ms = int(instrument.deliveryTime or 0)
+            if delivery_ms > 0:
+                if delivery_ms % 60_000 == 0:
+                    end_ms = min(bounds.end_ms, delivery_ms)
+                else:
+                    end_ms = min(
+                        bounds.end_ms,
+                        align_down_ms(delivery_ms, "1") + 60_000,
+                    )
+            else:
+                end_ms = bounds.end_ms
+
+            artifact = download_symbol_month(
+                client,
+                symbol=symbol,
+                bounds=bounds,
+                run_dir=run_dir,
+                now_ms=now_ms,
+                data_start_ms=start_ms,
+                data_end_ms=end_ms,
+            )
+            artifacts.append(artifact)
+            lifetime_rows.append(
+                {
+                    "symbol": symbol,
+                    "first_trade_ms": first_trade_ms,
+                    "delivery_ms": delivery_ms,
+                    "partition_data_start_ms": start_ms,
+                    "partition_data_end_ms": end_ms,
+                    "expected_minutes": artifact.expected_minutes,
+                    "actual_minutes": artifact.actual_minutes,
+                    "missing_minutes": artifact.missing_minutes,
+                    "logical_content_sha256": artifact.logical_content_sha256,
+                }
+            )
+
+    overlap_start = max(item.data_start_ms for item in artifacts)
+    overlap_end = min(item.data_end_ms for item in artifacts)
+    overlap_ms = max(0, overlap_end - overlap_start)
+    manifest = {
+        "run_id": run_id,
+        "kind": "bulk-boundary-pilot",
+        "created_at_ms": now_ms,
+        "month": bounds.label,
+        "selected_symbols": selected,
+        "inventory_sha256": snapshot.sha256,
+        "git_commit_sha": _git_commit_sha(),
+        "spec_version": SPEC_VERSION,
+        "data_contract_version": DATA_CONTRACT_VERSION,
+        "lifetime_partitions": lifetime_rows,
+        "overlap_start_ms": overlap_start if overlap_ms else None,
+        "overlap_end_ms": overlap_end if overlap_ms else None,
+        "overlap_ms": overlap_ms,
+        "status": "COMPLETE",
+    }
+    atomic_write_bytes(
+        run_dir / "manifest.json",
+        json.dumps(manifest, indent=2, sort_keys=True).encode("utf-8"),
+    )
+    typer.echo(f"boundary pilot complete: {run_dir}")
+    typer.echo(f"overlap hours: {overlap_ms / 3_600_000:.3f}")
 
 
 if __name__ == "__main__":
