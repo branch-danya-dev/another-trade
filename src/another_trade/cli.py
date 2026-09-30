@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import platform
 import subprocess
 import time
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Annotated
 
@@ -16,6 +18,13 @@ from another_trade.io import atomic_write_bytes
 app = typer.Typer(no_args_is_help=True)
 audit_app = typer.Typer(no_args_is_help=True)
 app.add_typer(audit_app, name="audit")
+
+
+def _package_version(name: str) -> str:
+    try:
+        return version(name)
+    except PackageNotFoundError:
+        return "UNKNOWN"
 
 
 def _git_commit_sha() -> str:
@@ -79,6 +88,16 @@ def coverage(
                 "spec_version": "v0.2.3",
                 "data_contract_version": "v0.1.4",
                 "requests_per_second": client.requests_per_second,
+                "software_versions": {
+                    "python": platform.python_version(),
+                    "python_implementation": platform.python_implementation(),
+                    "platform": platform.platform(),
+                    "tzdata": _package_version("tzdata"),
+                    "httpx": _package_version("httpx"),
+                    "pydantic": _package_version("pydantic"),
+                    "typer": _package_version("typer"),
+                },
+                "identity_relationships": snapshot.identity_relationships,
             }
             atomic_write_bytes(
                 run_dir / "manifest.json",
