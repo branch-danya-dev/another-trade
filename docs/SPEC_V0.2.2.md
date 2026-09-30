@@ -2,7 +2,7 @@
 
 Status: **FROZEN FOR IMPLEMENTATION**
 
-Supersedes v0.2.2 before validation was opened. v0.2 and v0.2.2 remain archived for traceability.
+Supersedes v0.2.1 before validation was opened. v0.2 and v0.2.1 remain archived for traceability.
 
 This document is the canonical trading specification. Code must implement it literally. Any behavioral change requires a new specification version before implementation.
 
@@ -168,7 +168,7 @@ Take the top 5 by RV24 from the top-20 turnover set.
 
 Tie-break: higher turnover wins. Final deterministic tie-break: symbol ascending.
 
-Historical spread is not a strategy filter in v0.2.
+Historical spread is not a strategy filter in v0.2.2.
 
 Live spread may be recorded as telemetry but may not alter decisions.
 
@@ -775,6 +775,12 @@ initial_equity
 
 Unrealized PnL is excluded.
 
+For historical/backtest mode:
+
+```text
+risk_equity = canonical_realized_equity
+```
+
 ### Live dual-equity rule
 
 Live/demo with real exchange execution maintain two ledgers:
@@ -1266,7 +1272,7 @@ Also report:
 
 The purpose is to detect strategy starvation—especially from the cost floor—before opening validation data.
 
-Low projected sample size may motivate a new specification version **only while still inside the development phase**. It may not justify changing v0.2 after validation/holdout inspection.
+Low projected sample size may motivate a new specification version **only while still inside the development phase**. It may not justify changing v0.2.2 after validation/holdout inspection.
 
 ---
 
@@ -1293,4 +1299,4 @@ Low projected sample size may motivate a new specification version **only while 
 19. Either canonical or actual live daily-loss breach blocks new risk.
 20. Indicator chains re-seed after unresolved data gaps using the exact rules above.
 
-See [VALIDATION_PROTOCOL.md](VALIDATION_PROTOCOL.md) for frozen sample boundaries and PASS/FAIL/INCONCLUSIVE rules.
+See [VALIDATION_PROTOCOL_V0.2.2.md](VALIDATION_PROTOCOL_V0.2.2.md) for frozen sample boundaries and PASS/FAIL/INCONCLUSIVE rules.
