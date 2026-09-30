@@ -8,7 +8,7 @@ This repository intentionally does **not** inherit trading logic, strategy engin
 
 ## Current status
 
-- Trading specification: **v0.2.4**
+- Trading specification: **v0.2.5**
 - Specification state: **frozen for implementation**
 - Next phase: **historical data audit / Data Contract validation**
 - Backtest implementation: not started
@@ -18,9 +18,9 @@ The first goal is not to prove profitability. The first goal is to build a repro
 
 ## Documents
 
-- [Trading specification v0.2.4](docs/SPEC_V0.2.4.md)
-- [Data Contract v0.1.6](docs/DATA_CONTRACT_V0.1.6.md)
-- [Validation protocol v0.2.5](docs/VALIDATION_PROTOCOL_V0.2.5.md)
+- [Trading specification v0.2.5](docs/SPEC_V0.2.5.md)
+- [Data Contract v0.1.7](docs/DATA_CONTRACT_V0.1.7.md)
+- [Validation protocol v0.2.6](docs/VALIDATION_PROTOCOL_V0.2.6.md)
 - [Live operations & compliance gate](docs/LIVE_OPERATIONS_AND_COMPLIANCE.md)
 - [Archived specification v0.2.1](docs/SPEC_V0.2.1.md)
 - [Archived specification v0.2](docs/SPEC_V0.2.md)
@@ -82,7 +82,7 @@ Planned data classes:
 - official U.S. CPI and Employment Situation release schedules from BLS;
 - FOMC meeting / statement calendar from the Federal Reserve.
 
-See [docs/DATA_CONTRACT_V0.1.6.md](docs/DATA_CONTRACT_V0.1.6.md) for the audit requirements and known limitations.
+See [docs/DATA_CONTRACT_V0.1.7.md](docs/DATA_CONTRACT_V0.1.7.md) for the audit requirements and known limitations.
 
 
 ## Data Audit milestone 1
@@ -115,3 +115,22 @@ another-trade audit sample-coverage
 `sample-coverage` is intentionally not a bulk downloader. It derives `first_trade_ms`, performs aligned control probes (including a pre-launch lifetime-conflict probe) plus one bounded funding probe, checkpoints each symbol to JSONL, and writes a run manifest. Review the run-specific `coverage-summary.json` before implementing any full-history download.
 
 GitHub-hosted runners currently execute from a Bybit-restricted U.S. region, so CI validates code without requiring network access to Bybit. Real fixtures and the first sample-coverage run must be captured from an allowed network.
+
+
+## Bulk pilot
+
+Before full historical download, run the bounded development-period pilot:
+
+```bash
+another-trade audit bulk-pilot --month 2024-06
+```
+
+To exercise crash/resume deliberately:
+
+```bash
+another-trade audit bulk-pilot --month 2024-06 --abort-after-pages 12
+# copy the printed run directory, then:
+another-trade audit bulk-pilot --month 2024-06 --resume-run "<run-dir>"
+```
+
+The pilot stores raw Bybit responses in one transactional SQLite container per symbol/month, writes canonical Parquet with pinned `pyarrow==25.0.1`, compares local 1m aggregation against native 15m/1H/D bars, and tests 1m vs 60m Mark Price OPEN at funding timestamps.
