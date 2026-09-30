@@ -723,18 +723,6 @@ def _native_compare(
     }
 
 
-def _sample_funding_timestamps(items: Sequence[int], limit: int = 5) -> list[int]:
-    ordered = sorted(set(items))
-    if len(ordered) <= limit:
-        return ordered
-    indexes = {0, len(ordered) - 1, len(ordered) // 2}
-    if limit >= 4:
-        indexes.add(len(ordered) // 4)
-    if limit >= 5:
-        indexes.add((3 * len(ordered)) // 4)
-    return [ordered[index] for index in sorted(indexes)]
-
-
 def _funding_events_for_month(
     client: BybitPublicClient,
     store: RawPageStore,
@@ -805,7 +793,19 @@ def compare_mark_price_funding_opens(
         for item in funding
         if bounds.start_ms <= int(item.fundingRateTimestamp) < bounds.end_ms
     ]
-    aligned = [timestamp for timestamp in timestamps if timestamp % HOUR_MS == 0]
+    ordered_timestamps = sorted(set(timestamps))
+    aligned = [timestamp for timestamp in ordered_timestamps if timestamp % HOUR_MS == 0]
+    observed_intervals_minutes = sorted(
+        {
+            (right - left) // MINUTE_MS
+            for left, right in zip(
+                ordered_timestamps,
+                ordered_timestamps[1:],
+                strict=False,
+            )
+            if right > left
+        }
+    )
 
     hourly_params: dict[str, str | int] = {
         "category": "linear",
@@ -887,6 +887,7 @@ def compare_mark_price_funding_opens(
 
     return {
         "funding_event_count": len(timestamps),
+        "observed_funding_intervals_minutes": observed_intervals_minutes,
         "hour_aligned_count": len(aligned),
         "hour_alignment_rate": (
             len(aligned) / len(timestamps) if timestamps else None
