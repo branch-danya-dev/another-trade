@@ -95,14 +95,14 @@ class BybitPublicClient:
         return {key: value for key, value in params.items() if value is not None}
 
     def _backoff(self, attempt: int, response: httpx.Response | None = None) -> float:
-        base = min(8.0, 0.5 * (2**attempt))
+        base = float(min(8.0, 0.5 * (2**attempt)))
         if response is not None:
             reset = response.headers.get("X-Bapi-Limit-Reset-Timestamp")
             if reset and reset.isdigit():
                 delta = int(reset) / 1000.0 - time.time()
                 if 0 < delta < 60:
-                    return max(base, delta)
-        return base
+                    return float(max(base, delta))
+        return float(base)
 
     def _request_raw(
         self,
