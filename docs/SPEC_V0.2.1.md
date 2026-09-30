@@ -12,11 +12,11 @@ One strategy only:
 
 **intraday trend-following breakout and retest of objective previous-period levels.**
 
-No discretionary level quality, order-flow score, manual override, ML prediction, density confirmation, round-number heuristic, local pivot clustering, or inherited logic from previous trading-bot projects is part of v0.2.
+No discretionary level quality, order-flow score, manual override, ML prediction, density confirmation, round-number heuristic, local pivot clustering, or inherited logic from previous trading-bot projects is part of v0.2.1.
 
 Market: Bybit USDT linear perpetuals.
 
-BTC is context only and is not traded by v0.2.
+BTC is context only and is not traded by v0.2.1.
 
 ---
 
