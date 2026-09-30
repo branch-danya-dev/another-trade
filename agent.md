@@ -10,7 +10,7 @@ Do not reuse strategy logic, heuristics, risk gates, scoring systems, ML layers,
 
 The current canonical strategy is:
 
-- [docs/SPEC_V0.2.md](docs/SPEC_V0.2.md)
+- [docs/SPEC_V0.2.1.md](docs/SPEC_V0.2.1.md)
 - [docs/DATA_CONTRACT.md](docs/DATA_CONTRACT.md)
 - [docs/VALIDATION_PROTOCOL.md](docs/VALIDATION_PROTOCOL.md)
 
@@ -118,6 +118,7 @@ Given:
 - same starting equity;
 - same configuration;
 - same event order;
+- same Decision Cost Model version;
 
 the backtester must produce byte-for-byte equivalent normalized trade decisions and deterministic result metrics, excluding intentionally nondeterministic metadata such as wall-clock runtime.
 
@@ -165,6 +166,10 @@ Do not use an unfinished 1H candle for trend context.
 
 At every decision timestamp, prove that every input candle has closed.
 
+EMA50 and ATR14 must use the exact seed/smoothing definitions in SPEC_V0.2.1. Never substitute a library default without a parity test.
+
+Universe cutoff is exactly 09:00 Europe/Amsterdam and only bars closing strictly before the cutoff may rank the universe.
+
 ---
 
 ## Data rules
@@ -172,8 +177,10 @@ At every decision timestamp, prove that every input candle has closed.
 Never silently:
 
 - forward-fill missing execution prices;
+- calculate PDH/PDL/PWH/PWL from an incomplete source day/week;
 - use today's universe for historical dates;
 - remove delisted symbols;
+- stitch token migrations/renames into one synthetic history;
 - replace unknown historical tick/qty metadata with current values;
 - synthesize funding events;
 - infer news timestamps from a generic recurring schedule when official historical timestamps exist.
@@ -194,11 +201,12 @@ It should, at minimum:
 2. persist launch/delivery metadata;
 3. test historical 1m kline coverage over instrument lifetime;
 4. inspect gap structure;
-5. test funding-history coverage;
-6. report historical grid metadata status;
-7. normalize CPI, Employment Situation, and FOMC event timestamps from official sources;
-8. produce the artifacts listed in DATA_CONTRACT.md;
-9. produce an immutable manifest/hash for the audited dataset.
+5. test funding-history and 1m Mark Price coverage;
+6. recover missing delisted 1m candles from official trade archives where possible and reconcile overlap against Kline API;
+7. report historical grid metadata status;
+8. normalize CPI, Employment Situation, and FOMC event timestamps from official sources;
+9. produce the artifacts listed in DATA_CONTRACT.md;
+10. produce an immutable manifest/hash for the audited dataset.
 
 The audit should support resumable downloads and local caching. Do not repeatedly hit APIs for already-verified immutable historical pages.
 
@@ -278,11 +286,16 @@ Before any validation run, tests must cover at least:
 - multi-level breakout outermost selection;
 - crossed-level consumption.
 
-### Closed-candle protection
+### Closed-candle protection and indicator parity
 
 - 10:45 decision cannot use 10:00–11:00 unfinished 1H;
 - EMA calculation excludes unfinished bars;
-- breakout volume average excludes breakout candle.
+- EMA50 uses SMA seed of first 50 closed 1H closes and alpha 2/51;
+- live EMA restore/recompute equals canonical historical chain;
+- ATR14 uses Wilder TR + Wilder RMA seed/smoothing;
+- breakout volume average excludes breakout candle;
+- WS `confirm=true` candle reconciles against REST before entry activation;
+- reconciliation timeout rejects the setup.
 
 ### Grid
 
@@ -295,8 +308,13 @@ Before any validation run, tests must cover at least:
 
 ### Execution
 
-- touch does not fill;
-- strict penetration fills;
+- LIMIT touch does not fill;
+- LIMIT strict penetration fills;
+- initial/BE stops use `LastPrice`;
+- adverse stop touch (`<=` / `>=`) triggers;
+- MarkPrice/IndexPrice stop configuration is rejected;
+- entry cannot activate before breakout close + 60s;
+- first eligible historical fill minute starts exactly at activation;
 - entry + TP in same minute does not credit TP;
 - entry + stop in same minute stops out;
 - stop + TP in same existing-position minute resolves to stop;
@@ -307,6 +325,8 @@ Before any validation run, tests must cover at least:
 
 - pending order reserves slot;
 - pending order reserves risk;
+- remaining 1% risk capacity can reduce a new order quantity;
+- equity loss with old reservations cannot push a new reservation above current risk capacity;
 - pending order reserves daily fill capacity;
 - no fourth daily filled setup is possible;
 - third fill cancels stray pending entries defensively.
@@ -320,10 +340,16 @@ Before any validation run, tests must cover at least:
 
 ### Data integrity
 
+- only crypto LinearPerpetual USDT instruments are eligible;
+- TradFi/pre-listing/delivery instruments are rejected;
+- universe cutoff produces 96 bars and exactly 95 internal returns;
 - delisted instrument appears in historical universe during lifetime;
 - future listing is absent before launch;
 - unresolved 1m gap invalidates affected setup;
-- funding applied only at actual event timestamp.
+- gap in previous day/week invalidates corresponding objective levels;
+- token migration histories remain separate;
+- trade-reconstructed 1m candles reconcile against API candles where overlap exists;
+- funding applied only at actual event timestamp using Mark Price data.
 
 ---
 
@@ -331,7 +357,7 @@ Before any validation run, tests must cover at least:
 
 When live/demo execution is eventually implemented:
 
-1. stop protection must be placed on exchange immediately after fill;
+1. stop protection must be placed on exchange immediately after fill with `triggerBy=LastPrice`;
 2. partial fills must resize protection to actual filled quantity;
 3. reconnect must reconcile exchange positions and orders before new decisions;
 4. race conditions such as fill-during-cancel must be idempotent;
@@ -403,3 +429,5 @@ The Data Audit milestone is complete when:
 - tests cover pagination, time boundaries, gap detection, and resume/cache behavior.
 
 Only then proceed to implementing the backtester.
+
+Before any real-money stage, the operational/compliance gate in [docs/LIVE_OPERATIONS_AND_COMPLIANCE.md](docs/LIVE_OPERATIONS_AND_COMPLIANCE.md) must also be re-verified against then-current Bybit terms and applicable law.
