@@ -19,6 +19,8 @@ class CachedResponse:
 class ImmutableResponseCache:
     """Content-addressed raw-response cache for immutable historical requests."""
 
+    KEY_VERSION = 2
+
     def __init__(self, root: Path) -> None:
         self.root = root
 
@@ -32,6 +34,7 @@ class ImmutableResponseCache:
     ) -> str:
         canonical = json.dumps(
             {
+                "cache_key_version": ImmutableResponseCache.KEY_VERSION,
                 "base_url": base_url,
                 "method": method.upper(),
                 "path": path,
@@ -67,6 +70,7 @@ class ImmutableResponseCache:
         body_path, meta_path = self._paths(key)
         digest = hashlib.sha256(raw).hexdigest()
         metadata: dict[str, object] = {
+            "cache_key_version": self.KEY_VERSION,
             **request_metadata,
             "sha256": digest,
             "bytes": len(raw),
