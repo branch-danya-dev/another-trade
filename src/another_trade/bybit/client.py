@@ -217,7 +217,7 @@ class BybitPublicClient:
     def _kline_cache_guard(interval: str, now_ms: int) -> Callable[[bytes], bool]:
         def guard(raw: bytes) -> bool:
             envelope = KlineEnvelope.model_validate(BybitPublicClient._decode(raw))
-            return all(
+            return bool(envelope.result.list) and all(
                 close_time_ms(int(row[0]), interval) <= now_ms
                 for row in envelope.result.list
             )
@@ -331,6 +331,17 @@ class BybitPublicClient:
         candles = tuple(by_start[key] for key in sorted(by_start))
         return KlineSeries(candles, duplicates, unfinished, self._gaps(candles, step))
 
+    @staticmethod
+    def _funding_cache_guard(now_ms: int) -> Callable[[bytes], bool]:
+        def guard(raw: bytes) -> bool:
+            envelope = FundingEnvelope.model_validate(BybitPublicClient._decode(raw))
+            return bool(envelope.result.list) and all(
+                int(item.fundingRateTimestamp) <= now_ms
+                for item in envelope.result.list
+            )
+
+        return guard
+
     def funding_page(
         self,
         *,
@@ -353,6 +364,7 @@ class BybitPublicClient:
                 "limit": limit,
             },
             cacheable=end_ms < now_value,
+            cache_guard=self._funding_cache_guard(now_value),
         )
         try:
             envelope = FundingEnvelope.model_validate(self._decode(raw))
