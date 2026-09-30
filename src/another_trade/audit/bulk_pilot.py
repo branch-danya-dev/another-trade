@@ -10,6 +10,7 @@ from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 from enum import StrEnum
+from itertools import pairwise
 from pathlib import Path
 from typing import cast
 
@@ -798,11 +799,7 @@ def compare_mark_price_funding_opens(
     observed_intervals_minutes = sorted(
         {
             (right - left) // MINUTE_MS
-            for left, right in zip(
-                ordered_timestamps,
-                ordered_timestamps[1:],
-                strict=False,
-            )
+            for left, right in pairwise(ordered_timestamps)
             if right > left
         }
     )
