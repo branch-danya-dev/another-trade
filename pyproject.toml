@@ -1,0 +1,44 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "another-trade"
+version = "0.1.0"
+description = "Deterministic Bybit intraday strategy research and execution system"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "httpx>=0.28,<1",
+  "pydantic>=2.10,<3",
+  "typer>=0.15,<1",
+]
+
+[project.scripts]
+another-trade = "another_trade.cli:app"
+
+[dependency-groups]
+dev = [
+  "mypy>=1.13,<2",
+  "pytest>=8.3,<9",
+  "ruff>=0.8,<1",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/another_trade"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+packages = ["another_trade"]
+
+[tool.pytest.ini_options]
+addopts = "-ra"
+testpaths = ["tests"]
