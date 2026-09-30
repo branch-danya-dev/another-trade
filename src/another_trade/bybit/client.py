@@ -347,10 +347,6 @@ class BybitPublicClient:
         self._validate_kline_range(start_ms, end_ms, interval)
 
         now_value = int(time.time() * 1000) if now_ms is None else now_ms
-        step = interval_ms(interval)
-        immutable_before = now_value - CACHE_IMMUTABILITY_HORIZON_MS
-        cacheable = end_ms + step <= immutable_before
-
         page = self.kline_page_with_raw(
             symbol=symbol,
             start_ms=start_ms,

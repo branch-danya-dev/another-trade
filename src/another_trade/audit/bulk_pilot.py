@@ -4,12 +4,12 @@ import gzip
 import hashlib
 import json
 import sqlite3
+from collections.abc import Iterator, Sequence
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, Iterable, Iterator, Sequence
 
 import pyarrow as pa
 import pyarrow.parquet as pq
