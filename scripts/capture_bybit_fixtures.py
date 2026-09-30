@@ -2,85 +2,56 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
-CANDIDATE_BASE_URLS = [
-    "https://api.bybit.eu",
-    "https://api.bytick.com",
-    "https://api-testnet.bybit.com",
-    "https://api.bybit.com",
-]
-BASE_URL = ""
+BASE_URL = os.environ.get("BYBIT_BASE_URL", "https://api.bybit.com").rstrip("/")
 OUT = Path("tests/fixtures/bybit")
 USER_AGENT = "another-trade-data-audit/0.1 fixture-capture"
 
 
-def request(
-    path: str,
-    params: dict[str, Any],
-    *,
-    base_url: str | None = None,
-) -> tuple[bytes, int, str]:
+def request(path: str, params: dict[str, Any]) -> tuple[bytes, int, str]:
     query = urllib.parse.urlencode(params)
-    root = base_url or BASE_URL
-    url = f"{root}{path}?{query}"
+    url = f"{BASE_URL}{path}?{query}"
     req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     try:
         with urllib.request.urlopen(req, timeout=30) as response:
-            raw = response.read()
-            status = response.status
+            return response.read(), response.status, url
     except urllib.error.HTTPError as exc:
-        raw = exc.read()
-        status = exc.code
-    return raw, status, url
+        return exc.read(), exc.code, url
 
 
 def decode(raw: bytes) -> dict[str, Any]:
-    value = json.loads(raw.decode("utf-8"))
+    value = json.loads(raw.decode("utf-8"), parse_float=Decimal, parse_int=int)
     if not isinstance(value, dict):
         raise RuntimeError("Bybit response is not a JSON object")
     return value
 
 
-def require_ok(raw: bytes, label: str) -> dict[str, Any]:
-    payload = decode(raw)
+def require_ok(raw: bytes, status: int, label: str) -> dict[str, Any]:
+    try:
+        payload = decode(raw)
+    except Exception as exc:
+        if status == 403:
+            raise RuntimeError(
+                f"{label}: Bybit returned HTTP 403 from {BASE_URL}. "
+                "Run fixture capture from a network/jurisdiction allowed by Bybit."
+            ) from exc
+        raise
+    if status != 200:
+        raise RuntimeError(f"{label}: HTTP {status}: {raw[:300]!r}")
     if payload.get("retCode") != 0:
         raise RuntimeError(
-            f"{label}: HTTP response contained retCode={payload.get('retCode')} "
+            f"{label}: retCode={payload.get('retCode')} "
             f"retMsg={payload.get('retMsg')!r}"
         )
     return payload
-
-
-def select_base_url() -> str:
-    errors: list[str] = []
-    for base_url in CANDIDATE_BASE_URLS:
-        raw, status, _ = request(
-            "/v5/market/instruments-info",
-            {"category": "linear", "status": "Trading", "limit": 3},
-            base_url=base_url,
-        )
-        try:
-            payload = decode(raw)
-        except Exception as exc:
-            errors.append(
-                f"{base_url}: HTTP {status}, non-JSON: {raw[:160]!r} ({exc})"
-            )
-            continue
-        if status == 200 and payload.get("retCode") == 0:
-            return base_url
-        errors.append(
-            f"{base_url}: HTTP {status}, retCode={payload.get('retCode')} "
-            f"retMsg={payload.get('retMsg')!r}"
-        )
-    raise RuntimeError(
-        "No official Bybit endpoint reachable from runner:\n" + "\n".join(errors)
-    )
 
 
 def store(
@@ -105,25 +76,22 @@ def store(
     )
 
 
+def fetch_instruments(status_name: str, limit: int = 1000) -> tuple[bytes, dict[str, Any], str]:
+    raw, status, url = request(
+        "/v5/market/instruments-info",
+        {"category": "linear", "status": status_name, "limit": limit},
+    )
+    return raw, require_ok(raw, status, f"{status_name} instruments"), url
+
+
 def main() -> None:
-    global BASE_URL
-    BASE_URL = select_base_url()
-    print(f"Capturing fixtures from {BASE_URL}")
     manifest: list[dict[str, Any]] = []
 
-    trading_raw, status, url = request(
-        "/v5/market/instruments-info",
-        {"category": "linear", "status": "Trading", "limit": 20},
-    )
-    require_ok(trading_raw, "Trading instruments")
-    store("instruments_trading.json", trading_raw, status, url, manifest)
+    trading_raw, trading, trading_url = fetch_instruments("Trading", 100)
+    store("instruments_trading.json", trading_raw, 200, trading_url, manifest)
 
-    closed_raw, status, url = request(
-        "/v5/market/instruments-info",
-        {"category": "linear", "status": "Closed", "limit": 100},
-    )
-    closed = require_ok(closed_raw, "Closed instruments")
-    store("instruments_closed.json", closed_raw, status, url, manifest)
+    closed_raw, closed, closed_url = fetch_instruments("Closed", 1000)
+    store("instruments_closed.json", closed_raw, 200, closed_url, manifest)
 
     closed_items = closed.get("result", {}).get("list", [])
     candidates = [
@@ -135,11 +103,12 @@ def main() -> None:
     ]
     if not candidates:
         raise RuntimeError(
-            f"{BASE_URL}: Closed response contains no USDT LinearPerpetual candidate"
+            "Closed inventory page has no USDT LinearPerpetual candidate. "
+            "Extend the capture script with cursor pagination before inventing a fixture."
         )
 
     instrument = candidates[0]
-    symbol = instrument["symbol"]
+    symbol = str(instrument["symbol"])
     launch_ms = int(instrument["launchTime"])
     delivery_ms = int(instrument.get("deliveryTime") or 0)
     if delivery_ms <= launch_ms:
@@ -158,7 +127,7 @@ def main() -> None:
             "limit": 100,
         },
     )
-    require_ok(kline_raw, f"{symbol} closed kline")
+    require_ok(kline_raw, status, f"{symbol} closed kline")
     store("kline_closed_symbol.json", kline_raw, status, url, manifest)
 
     funding_raw, status, url = request(
@@ -170,7 +139,7 @@ def main() -> None:
             "limit": 20,
         },
     )
-    require_ok(funding_raw, f"{symbol} funding")
+    require_ok(funding_raw, status, f"{symbol} funding")
     store("funding_closed_symbol.json", funding_raw, status, url, manifest)
 
     now_ms = int(time.time() * 1000)
@@ -187,7 +156,7 @@ def main() -> None:
             "limit": 20,
         },
     )
-    require_ok(live_kline_raw, "BTCUSDT kline")
+    require_ok(live_kline_raw, status, "BTCUSDT kline")
     store("kline_trading_symbol.json", live_kline_raw, status, url, manifest)
 
     error_raw, status, url = request(
@@ -201,24 +170,29 @@ def main() -> None:
     )
     error_payload = decode(error_raw)
     if error_payload.get("retCode") == 0:
-        raise RuntimeError("Expected a non-zero retCode fixture")
+        raise RuntimeError("Expected a real non-zero retCode response fixture")
     store("retcode_error.json", error_raw, status, url, manifest)
 
-    captured_at = int(time.time() * 1000)
     manifest_doc = {
-        "captured_at_ms": captured_at,
+        "captured_at_ms": int(time.time() * 1000),
         "base_url": BASE_URL,
         "closed_fixture_symbol": symbol,
         "files": manifest,
     }
     manifest_raw = json.dumps(
-        manifest_doc, indent=2, sort_keys=True, ensure_ascii=False
+        manifest_doc,
+        indent=2,
+        sort_keys=True,
+        ensure_ascii=False,
     ).encode("utf-8")
     (OUT / "manifest.json").write_bytes(manifest_raw)
     (OUT / "manifest.json.sha256").write_text(
         hashlib.sha256(manifest_raw).hexdigest() + "\n",
         encoding="utf-8",
     )
+
+    print(f"Captured real fixtures from {BASE_URL}; closed symbol={symbol}")
+    print(f"Output: {OUT}")
 
 
 if __name__ == "__main__":
