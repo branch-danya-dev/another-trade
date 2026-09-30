@@ -19,7 +19,7 @@ The first goal is not to prove profitability. The first goal is to build a repro
 ## Documents
 
 - [Trading specification v0.2.3](docs/SPEC_V0.2.3.md)
-- [Data Contract v0.1.3](docs/DATA_CONTRACT_V0.1.4.md)
+- [Data Contract v0.1.4](docs/DATA_CONTRACT_V0.1.4.md)
 - [Validation protocol v0.2.3](docs/VALIDATION_PROTOCOL_V0.2.3.md)
 - [Live operations & compliance gate](docs/LIVE_OPERATIONS_AND_COMPLIANCE.md)
 - [Archived specification v0.2.1](docs/SPEC_V0.2.1.md)

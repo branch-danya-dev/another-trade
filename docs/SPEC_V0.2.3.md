@@ -2,7 +2,7 @@
 
 Status: **FROZEN FOR IMPLEMENTATION**
 
-Supersedes v0.2.3 before validation was opened. Earlier versions remain archived for traceability.
+Supersedes v0.2.2 before validation was opened. Earlier versions remain archived for traceability.
 
 This document is the canonical trading specification. Code must implement it literally. Any behavioral change requires a new specification version before implementation.
 

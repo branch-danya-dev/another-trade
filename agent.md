@@ -10,7 +10,7 @@ Do not reuse strategy logic, heuristics, risk gates, scoring systems, ML layers,
 
 The current canonical strategy is:
 
-- [docs/SPEC_V0.2.3.3.md](docs/SPEC_V0.2.3.3.md)
+- [docs/SPEC_V0.2.3.md](docs/SPEC_V0.2.3.md)
 - [docs/DATA_CONTRACT_V0.1.4.md](docs/DATA_CONTRACT_V0.1.4.md)
 - [docs/VALIDATION_PROTOCOL_V0.2.3.md](docs/VALIDATION_PROTOCOL_V0.2.3.md)
 
@@ -174,7 +174,7 @@ Do not use an unfinished 1H candle for trend context.
 
 At every decision timestamp, prove that every input candle has closed.
 
-EMA50 and ATR14 must use the exact seed/smoothing definitions in SPEC_V0.2.3.3. Never substitute a library default without a parity test.
+EMA50 and ATR14 must use the exact seed/smoothing definitions in SPEC_V0.2.3. Never substitute a library default without a parity test.
 
 Universe cutoff is exactly 09:00 Europe/Amsterdam and only bars closing strictly before the cutoff may rank the universe.
 
