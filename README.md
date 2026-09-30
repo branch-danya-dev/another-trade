@@ -19,8 +19,8 @@ The first goal is not to prove profitability. The first goal is to build a repro
 ## Documents
 
 - [Trading specification v0.2.5](docs/SPEC_V0.2.5.md)
-- [Data Contract v0.1.8](docs/DATA_CONTRACT_V0.1.8.md)
-- [Validation protocol v0.2.7](docs/VALIDATION_PROTOCOL_V0.2.7.md)
+- [Data Contract v0.1.9](docs/DATA_CONTRACT_V0.1.9.md)
+- [Validation protocol v0.2.8](docs/VALIDATION_PROTOCOL_V0.2.8.md)
 - [Live operations & compliance gate](docs/LIVE_OPERATIONS_AND_COMPLIANCE.md)
 - [Archived specification v0.2.1](docs/SPEC_V0.2.1.md)
 - [Archived specification v0.2](docs/SPEC_V0.2.md)
@@ -82,7 +82,7 @@ Planned data classes:
 - official U.S. CPI and Employment Situation release schedules from BLS;
 - FOMC meeting / statement calendar from the Federal Reserve.
 
-See [docs/DATA_CONTRACT_V0.1.8.md](docs/DATA_CONTRACT_V0.1.8.md) for the audit requirements and known limitations.
+See [docs/DATA_CONTRACT_V0.1.9.md](docs/DATA_CONTRACT_V0.1.9.md) for the audit requirements and known limitations.
 
 
 ## Data Audit milestone 1
@@ -134,3 +134,23 @@ another-trade audit bulk-pilot --month 2024-06 --resume-run "<run-dir>"
 ```
 
 The pilot stores raw Bybit responses in one transactional SQLite container per symbol/month, writes canonical Parquet with pinned `pyarrow==25.0.1`, compares local 1m aggregation against native 15m/1H/D bars, and tests 1m vs 60m Mark Price OPEN at funding timestamps.
+
+
+### Pre-full-download reproducibility checks
+
+After the resumed pilot, run an independent clean pilot under the same commit/config, then compare:
+
+```bash
+another-trade audit bulk-pilot --month 2024-06
+another-trade audit bulk-pilot-compare \
+  --reference-run "<resumed-run>" \
+  --candidate-run "<clean-run>"
+```
+
+Also run the lifetime-boundary pilot:
+
+```bash
+another-trade audit bulk-boundary-pilot --month 2024-09
+```
+
+The full universe download is blocked until the clean logical hashes match and the MATIC/POL partial-month partition test passes.
