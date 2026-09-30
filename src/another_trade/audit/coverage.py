@@ -3,9 +3,8 @@ from __future__ import annotations
 import csv
 import json
 import os
-import time
 from dataclasses import asdict, dataclass
-from decimal import Decimal, ROUND_HALF_EVEN
+from decimal import ROUND_HALF_EVEN, Decimal
 from enum import StrEnum
 from pathlib import Path
 
@@ -17,7 +16,7 @@ from another_trade.audit.inventory import (
 from another_trade.bybit.client import BybitPublicClient, KlineSeries
 from another_trade.bybit.models import Instrument
 from another_trade.io import atomic_write_bytes
-from another_trade.time import align_down_ms, interval_ms
+from another_trade.time import align_down_ms
 
 MINUTE_MS = 60_000
 DAY_MS = 86_400_000

@@ -2,7 +2,14 @@ from __future__ import annotations
 
 from datetime import UTC, date, datetime
 
-from another_trade.time import align_down_ms, close_time_ms, europe_session, universe_cutoff_ms, us_session, utc_ms
+from another_trade.time import (
+    align_down_ms,
+    close_time_ms,
+    europe_session,
+    universe_cutoff_ms,
+    us_session,
+    utc_ms,
+)
 
 
 def test_close_time_is_exclusive_end_without_minus_one_ms() -> None:
