@@ -4,7 +4,7 @@ import json
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from decimal import Decimal
+from decimal import Decimal, DecimalException
 from itertools import pairwise
 from pathlib import Path
 from typing import Any
@@ -12,7 +12,12 @@ from typing import Any
 import httpx
 from pydantic import ValidationError
 
-from another_trade.bybit.errors import BybitApiError, BybitHttpError, BybitRateLimitError
+from another_trade.bybit.errors import (
+    BybitApiError,
+    BybitHttpError,
+    BybitRateLimitError,
+    BybitTransportError,
+)
 from another_trade.bybit.models import (
     FundingEnvelope,
     FundingItem,
@@ -22,10 +27,11 @@ from another_trade.bybit.models import (
     KlineEnvelope,
 )
 from another_trade.cache import ImmutableResponseCache
-from another_trade.time import close_time_ms, interval_ms
+from another_trade.time import assert_aligned_ms, close_time_ms, interval_ms
 
 RETRYABLE_RET_CODES = {10000, 10006, 10016}
 RATE_LIMIT_RET_CODE = 10006
+CACHE_IMMUTABILITY_HORIZON_MS = 24 * 60 * 60 * 1000
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,6 +40,9 @@ class KlineSeries:
     duplicate_start_times: int
     unfinished_filtered: int
     gaps: tuple[tuple[int, int], ...]
+    raw_row_count: int
+    oldest_raw_start_ms: int | None
+    newest_raw_start_ms: int | None
 
 
 class BybitPublicClient:
@@ -60,7 +69,7 @@ class BybitPublicClient:
             base_url=self.base_url,
             timeout=timeout_s,
             transport=transport,
-            headers={"User-Agent": "another-trade-data-audit/0.1"},
+            headers={"User-Agent": "another-trade-data-audit/0.2"},
         )
 
     def close(self) -> None:
@@ -74,7 +83,10 @@ class BybitPublicClient:
 
     @staticmethod
     def _decode(raw: bytes) -> dict[str, Any]:
-        value = json.loads(raw.decode("utf-8"), parse_float=Decimal, parse_int=int)
+        try:
+            value = json.loads(raw.decode("utf-8"), parse_float=Decimal, parse_int=int)
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise BybitApiError(-1, f"invalid JSON response: {exc}") from exc
         if not isinstance(value, dict):
             raise BybitApiError(-1, "top-level response is not an object")
         return value
@@ -102,7 +114,7 @@ class BybitPublicClient:
                 delta = int(reset) / 1000.0 - time.time()
                 if 0 < delta < 60:
                     return float(max(base, delta))
-        return float(base)
+        return base
 
     def _request_raw(
         self,
@@ -129,9 +141,11 @@ class BybitPublicClient:
             self._throttle()
             try:
                 response = self.http.get(path, params=clean)
-            except httpx.TransportError:
+            except httpx.TransportError as exc:
                 if attempt >= self.max_retries:
-                    raise
+                    raise BybitTransportError(
+                        f"transport failure after {attempt + 1} attempts: {exc}"
+                    ) from exc
                 self.sleep(self._backoff(attempt))
                 continue
 
@@ -165,8 +179,12 @@ class BybitPublicClient:
                 raise BybitApiError(ret_code, ret_msg)
 
             if cacheable and self.cache is not None:
-                if cache_guard is not None and not cache_guard(raw):
-                    return raw
+                if cache_guard is not None:
+                    try:
+                        if not cache_guard(raw):
+                            return raw
+                    except (ValidationError, ValueError, TypeError, DecimalException) as exc:
+                        raise BybitApiError(-1, f"cache guard parse error: {exc}") from exc
                 self.cache.put(
                     key=key,
                     raw=raw,
@@ -185,7 +203,6 @@ class BybitPublicClient:
 
     @staticmethod
     def parse_instruments_page(raw: bytes) -> tuple[list[Instrument], str | None]:
-        """Parse exactly one real instruments-info response page."""
         try:
             envelope = InstrumentsEnvelope.model_validate(BybitPublicClient._decode(raw))
         except ValidationError as exc:
@@ -235,13 +252,23 @@ class BybitPublicClient:
     @staticmethod
     def _kline_cache_guard(interval: str, now_ms: int) -> Callable[[bytes], bool]:
         def guard(raw: bytes) -> bool:
-            envelope = KlineEnvelope.model_validate(BybitPublicClient._decode(raw))
+            try:
+                envelope = KlineEnvelope.model_validate(BybitPublicClient._decode(raw))
+            except ValidationError as exc:
+                raise BybitApiError(-1, f"kline cache schema error: {exc}") from exc
             return bool(envelope.result.list) and all(
                 close_time_ms(int(row[0]), interval) <= now_ms
                 for row in envelope.result.list
             )
 
         return guard
+
+    @staticmethod
+    def _validate_kline_range(start_ms: int, end_ms: int, interval: str) -> None:
+        assert_aligned_ms(start_ms, interval, name="start_ms")
+        assert_aligned_ms(end_ms, interval, name="end_ms")
+        if end_ms < start_ms:
+            raise ValueError("end_ms must be >= start_ms")
 
     def kline_page(
         self,
@@ -255,9 +282,13 @@ class BybitPublicClient:
     ) -> KlineSeries:
         if limit < 1 or limit > 1000:
             raise ValueError("Bybit kline limit must be 1..1000")
+        self._validate_kline_range(start_ms, end_ms, interval)
+
         now_value = int(time.time() * 1000) if now_ms is None else now_ms
         step = interval_ms(interval)
-        cacheable = end_ms + step <= now_value
+        immutable_before = now_value - CACHE_IMMUTABILITY_HORIZON_MS
+        cacheable = end_ms + step <= immutable_before
+
         raw = self._request_raw(
             "/v5/market/kline",
             {
@@ -276,11 +307,19 @@ class BybitPublicClient:
         except ValidationError as exc:
             raise BybitApiError(-1, f"kline schema error: {exc}") from exc
 
+        raw_rows = envelope.result.list
+        raw_start_times: list[int] = []
         by_start: dict[int, Kline] = {}
         duplicates = 0
         unfinished = 0
-        for row in envelope.result.list:
-            candle = Kline(row)
+
+        for row in raw_rows:
+            try:
+                raw_start = int(row[0])
+                candle = Kline(row)
+            except (ValueError, TypeError, DecimalException, IndexError) as exc:
+                raise BybitApiError(-1, f"invalid kline row {row!r}: {exc}") from exc
+            raw_start_times.append(raw_start)
             if close_time_ms(candle.start_ms, interval) > now_value:
                 unfinished += 1
                 continue
@@ -291,7 +330,15 @@ class BybitPublicClient:
 
         candles = tuple(by_start[key] for key in sorted(by_start))
         gaps = self._gaps(candles, step)
-        return KlineSeries(candles, duplicates, unfinished, gaps)
+        return KlineSeries(
+            candles=candles,
+            duplicate_start_times=duplicates,
+            unfinished_filtered=unfinished,
+            gaps=gaps,
+            raw_row_count=len(raw_rows),
+            oldest_raw_start_ms=min(raw_start_times) if raw_start_times else None,
+            newest_raw_start_ms=max(raw_start_times) if raw_start_times else None,
+        )
 
     @staticmethod
     def _gaps(candles: tuple[Kline, ...], step_ms: int) -> tuple[tuple[int, int], ...]:
@@ -312,13 +359,17 @@ class BybitPublicClient:
         limit: int = 1000,
         now_ms: int | None = None,
     ) -> KlineSeries:
-        """Paginate newest->oldest, deduplicate boundaries, then verify continuity."""
+        """Paginate newest->oldest using raw rows, not post-filter candle count."""
+        self._validate_kline_range(start_ms, end_ms, interval)
         now_value = int(time.time() * 1000) if now_ms is None else now_ms
         step = interval_ms(interval)
         page_end = end_ms
         by_start: dict[int, Kline] = {}
         duplicates = 0
         unfinished = 0
+        total_raw_rows = 0
+        oldest_raw_seen: int | None = None
+        newest_raw_seen: int | None = None
 
         while page_end >= start_ms:
             page = self.kline_page(
@@ -329,31 +380,58 @@ class BybitPublicClient:
                 limit=limit,
                 now_ms=now_value,
             )
+            total_raw_rows += page.raw_row_count
             duplicates += page.duplicate_start_times
             unfinished += page.unfinished_filtered
-            if not page.candles:
+
+            if page.raw_row_count == 0 or page.oldest_raw_start_ms is None:
                 break
+
+            oldest_raw_seen = (
+                page.oldest_raw_start_ms
+                if oldest_raw_seen is None
+                else min(oldest_raw_seen, page.oldest_raw_start_ms)
+            )
+            if page.newest_raw_start_ms is not None:
+                newest_raw_seen = (
+                    page.newest_raw_start_ms
+                    if newest_raw_seen is None
+                    else max(newest_raw_seen, page.newest_raw_start_ms)
+                )
+
             for candle in page.candles:
                 if candle.start_ms in by_start:
                     duplicates += 1
                 else:
                     by_start[candle.start_ms] = candle
 
-            oldest = page.candles[0].start_ms
-            if len(page.candles) < limit or oldest <= start_ms:
+            oldest_raw = page.oldest_raw_start_ms
+            if oldest_raw <= start_ms:
                 break
-            next_end = oldest - 1
+
+            next_end = oldest_raw - step
             if next_end >= page_end:
                 raise RuntimeError("kline pagination did not move backward")
             page_end = next_end
 
         candles = tuple(by_start[key] for key in sorted(by_start))
-        return KlineSeries(candles, duplicates, unfinished, self._gaps(candles, step))
+        return KlineSeries(
+            candles=candles,
+            duplicate_start_times=duplicates,
+            unfinished_filtered=unfinished,
+            gaps=self._gaps(candles, step),
+            raw_row_count=total_raw_rows,
+            oldest_raw_start_ms=oldest_raw_seen,
+            newest_raw_start_ms=newest_raw_seen,
+        )
 
     @staticmethod
     def _funding_cache_guard(now_ms: int) -> Callable[[bytes], bool]:
         def guard(raw: bytes) -> bool:
-            envelope = FundingEnvelope.model_validate(BybitPublicClient._decode(raw))
+            try:
+                envelope = FundingEnvelope.model_validate(BybitPublicClient._decode(raw))
+            except ValidationError as exc:
+                raise BybitApiError(-1, f"funding cache schema error: {exc}") from exc
             return bool(envelope.result.list) and all(
                 int(item.fundingRateTimestamp) <= now_ms
                 for item in envelope.result.list
@@ -373,6 +451,7 @@ class BybitPublicClient:
         if limit < 1 or limit > 200:
             raise ValueError("Bybit funding limit must be 1..200")
         now_value = int(time.time() * 1000) if now_ms is None else now_ms
+        immutable_before = now_value - CACHE_IMMUTABILITY_HORIZON_MS
         raw = self._request_raw(
             "/v5/market/funding/history",
             {
@@ -382,7 +461,7 @@ class BybitPublicClient:
                 "endTime": end_ms,
                 "limit": limit,
             },
-            cacheable=end_ms < now_value,
+            cacheable=end_ms < immutable_before,
             cache_guard=self._funding_cache_guard(now_value),
         )
         try:

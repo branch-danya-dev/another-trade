@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, time
+from datetime import UTC, date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 AMSTERDAM = ZoneInfo("Europe/Amsterdam")
 NEW_YORK = ZoneInfo("America/New_York")
+EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 
 INTERVAL_MS: dict[str, int] = {
     "1": 60_000,
@@ -18,6 +19,8 @@ INTERVAL_MS: dict[str, int] = {
     "240": 14_400_000,
     "360": 21_600_000,
     "720": 43_200_000,
+    "D": 86_400_000,
+    "W": 604_800_000,
 }
 
 
@@ -26,6 +29,16 @@ def interval_ms(interval: str) -> int:
         return INTERVAL_MS[interval]
     except KeyError as exc:
         raise ValueError(f"unsupported fixed interval: {interval}") from exc
+
+
+def align_down_ms(timestamp_ms: int, interval: str) -> int:
+    step = interval_ms(interval)
+    return timestamp_ms - (timestamp_ms % step)
+
+
+def assert_aligned_ms(timestamp_ms: int, interval: str, *, name: str) -> None:
+    if timestamp_ms != align_down_ms(timestamp_ms, interval):
+        raise ValueError(f"{name}={timestamp_ms} is not aligned to interval={interval}")
 
 
 def close_time_ms(start_time_ms: int, interval: str) -> int:
@@ -40,7 +53,8 @@ def is_closed_bar(start_time_ms: int, interval: str, now_ms: int) -> bool:
 def utc_ms(value: datetime) -> int:
     if value.tzinfo is None:
         raise ValueError("timezone-aware datetime required")
-    return int(value.astimezone(UTC).timestamp() * 1000)
+    delta = value.astimezone(UTC) - EPOCH
+    return delta // timedelta(milliseconds=1)
 
 
 @dataclass(frozen=True, slots=True)

@@ -2,12 +2,23 @@ from __future__ import annotations
 
 from datetime import UTC, date, datetime
 
-from another_trade.time import close_time_ms, europe_session, universe_cutoff_ms, us_session
+from another_trade.time import align_down_ms, close_time_ms, europe_session, universe_cutoff_ms, us_session, utc_ms
 
 
 def test_close_time_is_exclusive_end_without_minus_one_ms() -> None:
     start = int(datetime(2026, 3, 20, 8, 45, tzinfo=UTC).timestamp() * 1000)
     assert close_time_ms(start, "15") == start + 15 * 60_000
+
+
+def test_utc_ms_is_integer_datetime_arithmetic() -> None:
+    value = datetime(2026, 9, 30, 21, 20, 57, 123456, tzinfo=UTC)
+    expected = 1_796_240_457_123
+    assert utc_ms(value) == expected
+
+
+def test_align_down_ms() -> None:
+    assert align_down_ms(123_456, "1") == 120_000
+    assert align_down_ms(86_499_999, "D") == 0
 
 
 def test_bar_closing_at_cutoff_is_excluded_by_strict_less_than() -> None:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -10,6 +11,8 @@ from another_trade.bybit.errors import InventoryConflictError
 from another_trade.bybit.models import Instrument
 from another_trade.io import atomic_write_bytes
 
+ALLOWED_CRYPTO_SYMBOL_TYPES = {"", "innovation"}
+
 
 @dataclass(frozen=True, slots=True)
 class InventorySnapshot:
@@ -17,12 +20,20 @@ class InventorySnapshot:
     sha256: str
 
     @property
+    def status_counts(self) -> dict[str, int]:
+        return dict(sorted(Counter(item.status for item in self.instruments).items()))
+
+    @property
+    def symbol_type_counts(self) -> dict[str, int]:
+        return dict(sorted(Counter(item.symbolType for item in self.instruments).items()))
+
+    @property
     def trading_count(self) -> int:
-        return sum(item.status == "Trading" for item in self.instruments)
+        return self.status_counts.get("Trading", 0)
 
     @property
     def closed_count(self) -> int:
-        return sum(item.status == "Closed" for item in self.instruments)
+        return self.status_counts.get("Closed", 0)
 
 
 def currently_eligible_crypto_perpetual(item: Instrument) -> bool:
@@ -33,6 +44,15 @@ def currently_eligible_crypto_perpetual(item: Instrument) -> bool:
         and item.status in {"Trading", "Closed"}
         and item.isPreListing is not True
         and item.marketRegion == ""
+        and item.symbolType.casefold() in ALLOWED_CRYPTO_SYMBOL_TYPES
+    )
+
+
+def should_sample_for_audit(item: Instrument) -> bool:
+    return (
+        currently_eligible_crypto_perpetual(item)
+        or "OLD" in item.symbol.upper()
+        or item.status not in {"Trading", "Closed"}
     )
 
 
@@ -55,6 +75,7 @@ def collect_inventory(client: BybitPublicClient) -> InventorySnapshot:
         {
             **item.model_dump(mode="json"),
             "current_crypto_perpetual_eligible": currently_eligible_crypto_perpetual(item),
+            "audit_sample_candidate": should_sample_for_audit(item),
         }
         for item in instruments
     ]
@@ -65,12 +86,20 @@ def collect_inventory(client: BybitPublicClient) -> InventorySnapshot:
 def write_inventory(snapshot: InventorySnapshot, path: Path) -> None:
     doc = {
         "sha256": snapshot.sha256,
-        "trading_count": snapshot.trading_count,
-        "closed_count": snapshot.closed_count,
+        "total_count": len(snapshot.instruments),
+        "status_counts": snapshot.status_counts,
+        "symbol_type_counts": snapshot.symbol_type_counts,
+        "eligible_count": sum(
+            currently_eligible_crypto_perpetual(item) for item in snapshot.instruments
+        ),
+        "audit_sample_candidate_count": sum(
+            should_sample_for_audit(item) for item in snapshot.instruments
+        ),
         "instruments": [
             {
                 **item.model_dump(mode="json"),
                 "current_crypto_perpetual_eligible": currently_eligible_crypto_perpetual(item),
+                "audit_sample_candidate": should_sample_for_audit(item),
             }
             for item in snapshot.instruments
         ],

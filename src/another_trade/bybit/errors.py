@@ -23,5 +23,9 @@ class BybitRateLimitError(BybitApiError):
     pass
 
 
+class BybitTransportError(BybitError):
+    pass
+
+
 class InventoryConflictError(BybitError):
     pass
