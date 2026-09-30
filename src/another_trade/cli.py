@@ -11,12 +11,13 @@ from typing import Annotated
 import typer
 
 from another_trade.audit.coverage import run_sample_coverage, write_coverage
+from another_trade.audit.identity import load_identity_config
 from another_trade.audit.inventory import collect_inventory, write_inventory
 from another_trade.bybit.client import BybitPublicClient
 from another_trade.io import atomic_write_bytes
 
-SPEC_VERSION = "v0.2.3"
-DATA_CONTRACT_VERSION = "v0.1.5"
+SPEC_VERSION = "v0.2.4"
+DATA_CONTRACT_VERSION = "v0.1.6"
 
 app = typer.Typer(no_args_is_help=True)
 audit_app = typer.Typer(no_args_is_help=True)
@@ -99,6 +100,10 @@ def coverage(
                     "httpx": _package_version("httpx"),
                     "pydantic": _package_version("pydantic"),
                     "typer": _package_version("typer"),
+                },
+                "identity_relationship_config": {
+                    "version": load_identity_config().version,
+                    "sha256": load_identity_config().sha256,
                 },
                 "identity_relationships": snapshot.identity_relationships,
             }
