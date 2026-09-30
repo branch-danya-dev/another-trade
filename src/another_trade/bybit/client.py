@@ -25,6 +25,7 @@ from another_trade.bybit.models import (
     InstrumentsEnvelope,
     Kline,
     KlineEnvelope,
+    MarkPriceKline,
 )
 from another_trade.cache import ImmutableResponseCache
 from another_trade.time import assert_aligned_ms, close_time_ms, interval_ms
@@ -43,6 +44,21 @@ class KlineSeries:
     raw_row_count: int
     oldest_raw_start_ms: int | None
     newest_raw_start_ms: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class RawKlinePage:
+    series: KlineSeries
+    raw: bytes
+    endpoint: str
+    params: dict[str, str | int]
+
+
+@dataclass(frozen=True, slots=True)
+class MarkPriceSeries:
+    candles: tuple[MarkPriceKline, ...]
+    raw_row_count: int
+    unfinished_filtered: int
 
 
 class BybitPublicClient:
@@ -270,6 +286,52 @@ class BybitPublicClient:
         if end_ms < start_ms:
             raise ValueError("end_ms must be >= start_ms")
 
+    def _parse_kline_raw(
+        self,
+        raw: bytes,
+        *,
+        interval: str,
+        now_ms: int,
+    ) -> KlineSeries:
+        try:
+            envelope = KlineEnvelope.model_validate(self._decode(raw))
+        except ValidationError as exc:
+            raise BybitApiError(-1, f"kline schema error: {exc}") from exc
+
+        raw_rows = envelope.result.list
+        raw_start_times: list[int] = []
+        by_start: dict[int, Kline] = {}
+        duplicates = 0
+        unfinished = 0
+
+        for row in raw_rows:
+            try:
+                raw_start = int(row[0])
+                candle = Kline(row)
+            except (ValueError, TypeError, DecimalException, IndexError) as exc:
+                raise BybitApiError(-1, f"invalid kline row {row!r}: {exc}") from exc
+            raw_start_times.append(raw_start)
+            if close_time_ms(candle.start_ms, interval) > now_ms:
+                unfinished += 1
+                continue
+            if candle.start_ms in by_start:
+                duplicates += 1
+                continue
+            by_start[candle.start_ms] = candle
+
+        step = interval_ms(interval)
+        candles = tuple(by_start[key] for key in sorted(by_start))
+        gaps = self._gaps(candles, step)
+        return KlineSeries(
+            candles=candles,
+            duplicate_start_times=duplicates,
+            unfinished_filtered=unfinished,
+            gaps=gaps,
+            raw_row_count=len(raw_rows),
+            oldest_raw_start_ms=min(raw_start_times) if raw_start_times else None,
+            newest_raw_start_ms=max(raw_start_times) if raw_start_times else None,
+        )
+
     def kline_page(
         self,
         *,
@@ -289,55 +351,53 @@ class BybitPublicClient:
         immutable_before = now_value - CACHE_IMMUTABILITY_HORIZON_MS
         cacheable = end_ms + step <= immutable_before
 
+        page = self.kline_page_with_raw(
+            symbol=symbol,
+            start_ms=start_ms,
+            end_ms=end_ms,
+            interval=interval,
+            limit=limit,
+            now_ms=now_value,
+        )
+        return page.series
+
+    def kline_page_with_raw(
+        self,
+        *,
+        symbol: str,
+        start_ms: int,
+        end_ms: int,
+        interval: str = "1",
+        limit: int = 1000,
+        now_ms: int | None = None,
+    ) -> RawKlinePage:
+        if limit < 1 or limit > 1000:
+            raise ValueError("Bybit kline limit must be 1..1000")
+        self._validate_kline_range(start_ms, end_ms, interval)
+
+        now_value = int(time.time() * 1000) if now_ms is None else now_ms
+        step = interval_ms(interval)
+        immutable_before = now_value - CACHE_IMMUTABILITY_HORIZON_MS
+        cacheable = end_ms + step <= immutable_before
+        params: dict[str, str | int] = {
+            "category": "linear",
+            "symbol": symbol,
+            "interval": interval,
+            "start": start_ms,
+            "end": end_ms,
+            "limit": limit,
+        }
         raw = self._request_raw(
             "/v5/market/kline",
-            {
-                "category": "linear",
-                "symbol": symbol,
-                "interval": interval,
-                "start": start_ms,
-                "end": end_ms,
-                "limit": limit,
-            },
+            params,
             cacheable=cacheable,
             cache_guard=self._kline_cache_guard(interval, now_value),
         )
-        try:
-            envelope = KlineEnvelope.model_validate(self._decode(raw))
-        except ValidationError as exc:
-            raise BybitApiError(-1, f"kline schema error: {exc}") from exc
-
-        raw_rows = envelope.result.list
-        raw_start_times: list[int] = []
-        by_start: dict[int, Kline] = {}
-        duplicates = 0
-        unfinished = 0
-
-        for row in raw_rows:
-            try:
-                raw_start = int(row[0])
-                candle = Kline(row)
-            except (ValueError, TypeError, DecimalException, IndexError) as exc:
-                raise BybitApiError(-1, f"invalid kline row {row!r}: {exc}") from exc
-            raw_start_times.append(raw_start)
-            if close_time_ms(candle.start_ms, interval) > now_value:
-                unfinished += 1
-                continue
-            if candle.start_ms in by_start:
-                duplicates += 1
-                continue
-            by_start[candle.start_ms] = candle
-
-        candles = tuple(by_start[key] for key in sorted(by_start))
-        gaps = self._gaps(candles, step)
-        return KlineSeries(
-            candles=candles,
-            duplicate_start_times=duplicates,
-            unfinished_filtered=unfinished,
-            gaps=gaps,
-            raw_row_count=len(raw_rows),
-            oldest_raw_start_ms=min(raw_start_times) if raw_start_times else None,
-            newest_raw_start_ms=max(raw_start_times) if raw_start_times else None,
+        return RawKlinePage(
+            series=self._parse_kline_raw(raw, interval=interval, now_ms=now_value),
+            raw=raw,
+            endpoint="/v5/market/kline",
+            params=params,
         )
 
     @staticmethod
@@ -423,6 +483,58 @@ class BybitPublicClient:
             raw_row_count=total_raw_rows,
             oldest_raw_start_ms=oldest_raw_seen,
             newest_raw_start_ms=newest_raw_seen,
+        )
+
+    def mark_price_page(
+        self,
+        *,
+        symbol: str,
+        start_ms: int,
+        end_ms: int,
+        interval: str = "60",
+        limit: int = 1000,
+        now_ms: int | None = None,
+    ) -> MarkPriceSeries:
+        if limit < 1 or limit > 1000:
+            raise ValueError("Bybit mark-price kline limit must be 1..1000")
+        self._validate_kline_range(start_ms, end_ms, interval)
+
+        now_value = int(time.time() * 1000) if now_ms is None else now_ms
+        step = interval_ms(interval)
+        immutable_before = now_value - CACHE_IMMUTABILITY_HORIZON_MS
+        raw = self._request_raw(
+            "/v5/market/mark-price-kline",
+            {
+                "category": "linear",
+                "symbol": symbol,
+                "interval": interval,
+                "start": start_ms,
+                "end": end_ms,
+                "limit": limit,
+            },
+            cacheable=end_ms + step <= immutable_before,
+        )
+        try:
+            envelope = KlineEnvelope.model_validate(self._decode(raw))
+        except ValidationError as exc:
+            raise BybitApiError(-1, f"mark-price schema error: {exc}") from exc
+
+        candles: list[MarkPriceKline] = []
+        unfinished = 0
+        for row in envelope.result.list:
+            try:
+                candle = MarkPriceKline(row)
+            except (ValueError, TypeError, DecimalException, IndexError) as exc:
+                raise BybitApiError(-1, f"invalid mark-price row {row!r}: {exc}") from exc
+            if close_time_ms(candle.start_ms, interval) > now_value:
+                unfinished += 1
+                continue
+            candles.append(candle)
+        candles.sort(key=lambda candle: candle.start_ms)
+        return MarkPriceSeries(
+            candles=tuple(candles),
+            raw_row_count=len(envelope.result.list),
+            unfinished_filtered=unfinished,
         )
 
     @staticmethod
