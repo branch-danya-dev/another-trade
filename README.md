@@ -36,9 +36,11 @@ The first goal is not to prove profitability. The first goal is to build a repro
 7. All performance is reported after commissions, slippage, and funding.
 8. Risk is sized from expected all-in loss, not raw stop distance.
 9. Pending entries reserve position slots, risk, notional, and daily trade capacity.
-10. Development, validation, and final holdout periods are separated before testing.
-11. No parameter is changed after seeing holdout results without creating a new strategy version.
-12. Demo/live must reuse the same strategy core as the backtester.
+10. Decision Cost Model is frozen separately from BASE/STRESS/SEVERE execution ledgers.
+11. Initial and BE stops use LastPrice; live 15m decision candles reconcile WebSocket vs REST before deterministic entry activation.
+12. Development, validation, and final holdout periods are separated before testing.
+13. No parameter is changed after seeing holdout results without creating a new strategy version.
+14. Demo/live must reuse the same strategy core as the backtester.
 
 ## Planned workflow
 
