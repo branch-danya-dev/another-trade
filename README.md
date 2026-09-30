@@ -8,7 +8,7 @@ This repository intentionally does **not** inherit trading logic, strategy engin
 
 ## Current status
 
-- Trading specification: **v0.2.3**
+- Trading specification: **v0.2.4**
 - Specification state: **frozen for implementation**
 - Next phase: **historical data audit / Data Contract validation**
 - Backtest implementation: not started
@@ -18,9 +18,9 @@ The first goal is not to prove profitability. The first goal is to build a repro
 
 ## Documents
 
-- [Trading specification v0.2.3](docs/SPEC_V0.2.3.md)
-- [Data Contract v0.1.5](docs/DATA_CONTRACT_V0.1.5.md)
-- [Validation protocol v0.2.4](docs/VALIDATION_PROTOCOL_V0.2.4.md)
+- [Trading specification v0.2.4](docs/SPEC_V0.2.4.md)
+- [Data Contract v0.1.6](docs/DATA_CONTRACT_V0.1.6.md)
+- [Validation protocol v0.2.5](docs/VALIDATION_PROTOCOL_V0.2.5.md)
 - [Live operations & compliance gate](docs/LIVE_OPERATIONS_AND_COMPLIANCE.md)
 - [Archived specification v0.2.1](docs/SPEC_V0.2.1.md)
 - [Archived specification v0.2](docs/SPEC_V0.2.md)
@@ -82,7 +82,7 @@ Planned data classes:
 - official U.S. CPI and Employment Situation release schedules from BLS;
 - FOMC meeting / statement calendar from the Federal Reserve.
 
-See [docs/DATA_CONTRACT_V0.1.5.md](docs/DATA_CONTRACT_V0.1.5.md) for the audit requirements and known limitations.
+See [docs/DATA_CONTRACT_V0.1.6.md](docs/DATA_CONTRACT_V0.1.6.md) for the audit requirements and known limitations.
 
 
 ## Data Audit milestone 1
