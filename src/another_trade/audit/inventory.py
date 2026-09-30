@@ -13,6 +13,13 @@ from another_trade.io import atomic_write_bytes
 
 ALLOWED_CRYPTO_SYMBOL_TYPES = {"", "innovation"}
 
+# Audit-only identity relationships observed in Bybit metadata/history.
+# These are never stitched automatically into one tradable instrument.
+KNOWN_IDENTITY_RELATIONSHIPS: tuple[tuple[str, str, str], ...] = (
+    ("MATICUSDT", "POLUSDT", "token_migration"),
+    ("DATAOLD01USDT", "DATAUSDT", "relist_or_rename"),
+)
+
 
 @dataclass(frozen=True, slots=True)
 class InventorySnapshot:
@@ -26,6 +33,54 @@ class InventorySnapshot:
     @property
     def symbol_type_counts(self) -> dict[str, int]:
         return dict(sorted(Counter(item.symbolType for item in self.instruments).items()))
+
+    @property
+    def identity_relationships(self) -> list[dict[str, object]]:
+        by_symbol = {item.symbol: item for item in self.instruments}
+        out: list[dict[str, object]] = []
+        for left, right, relation in KNOWN_IDENTITY_RELATIONSHIPS:
+            left_item = by_symbol.get(left)
+            right_item = by_symbol.get(right)
+            if left_item is None and right_item is None:
+                continue
+            left_launch = int(left_item.launchTime) if left_item is not None else None
+            left_delivery = (
+                int(left_item.deliveryTime or 0) if left_item is not None else None
+            )
+            right_launch = int(right_item.launchTime) if right_item is not None else None
+            right_delivery = (
+                int(right_item.deliveryTime or 0) if right_item is not None else None
+            )
+            overlap_start = (
+                max(left_launch, right_launch)
+                if left_launch is not None and right_launch is not None
+                else None
+            )
+            left_end = left_delivery if left_delivery and left_delivery > 0 else None
+            right_end = right_delivery if right_delivery and right_delivery > 0 else None
+            overlap_end_candidates = [value for value in (left_end, right_end) if value]
+            overlap_end = min(overlap_end_candidates) if overlap_end_candidates else None
+            overlap_ms = (
+                max(0, overlap_end - overlap_start)
+                if overlap_start is not None and overlap_end is not None
+                else None
+            )
+            out.append(
+                {
+                    "left_symbol": left,
+                    "right_symbol": right,
+                    "relation": relation,
+                    "left_present": left_item is not None,
+                    "right_present": right_item is not None,
+                    "left_launch_ms": left_launch,
+                    "left_delivery_ms": left_delivery,
+                    "right_launch_ms": right_launch,
+                    "right_delivery_ms": right_delivery,
+                    "metadata_overlap_ms": overlap_ms,
+                    "automatic_stitching": False,
+                }
+            )
+        return out
 
     @property
     def trading_count(self) -> int:
@@ -95,6 +150,7 @@ def write_inventory(snapshot: InventorySnapshot, path: Path) -> None:
         "audit_sample_candidate_count": sum(
             should_sample_for_audit(item) for item in snapshot.instruments
         ),
+        "identity_relationships": snapshot.identity_relationships,
         "instruments": [
             {
                 **item.model_dump(mode="json"),
