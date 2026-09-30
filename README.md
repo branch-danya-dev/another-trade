@@ -8,7 +8,7 @@ This repository intentionally does **not** inherit trading logic, strategy engin
 
 ## Current status
 
-- Trading specification: **v0.2.1**
+- Trading specification: **v0.2.2**
 - Specification state: **frozen for implementation**
 - Next phase: **historical data audit / Data Contract validation**
 - Backtest implementation: not started
@@ -18,11 +18,12 @@ The first goal is not to prove profitability. The first goal is to build a repro
 
 ## Documents
 
-- [Trading specification v0.2.1](docs/SPEC_V0.2.1.md)
-- [Archived specification v0.2](docs/SPEC_V0.2.md)
-- [Data Contract](docs/DATA_CONTRACT.md)
-- [Validation protocol](docs/VALIDATION_PROTOCOL.md)
+- [Trading specification v0.2.2](docs/SPEC_V0.2.2.md)
+- [Data Contract v0.1.2](docs/DATA_CONTRACT_V0.1.2.md)
+- [Validation protocol v0.2.2](docs/VALIDATION_PROTOCOL_V0.2.2.md)
 - [Live operations & compliance gate](docs/LIVE_OPERATIONS_AND_COMPLIANCE.md)
+- [Archived specification v0.2.1](docs/SPEC_V0.2.1.md)
+- [Archived specification v0.2](docs/SPEC_V0.2.md)
 - [Agent instructions](agent.md)
 
 ## Core principles
@@ -37,10 +38,12 @@ The first goal is not to prove profitability. The first goal is to build a repro
 8. Risk is sized from expected all-in loss, not raw stop distance.
 9. Pending entries reserve position slots, risk, notional, and daily trade capacity.
 10. Decision Cost Model is frozen separately from BASE/STRESS/SEVERE execution ledgers.
-11. Initial and BE stops use LastPrice; live 15m decision candles reconcile WebSocket vs REST before deterministic entry activation.
-12. Development, validation, and final holdout periods are separated before testing.
-13. No parameter is changed after seeing holdout results without creating a new strategy version.
-14. Demo/live must reuse the same strategy core as the backtester.
+11. Canonical bars use half-open time intervals and `close_time = start + interval`.
+12. Live entry decisions are aggregated from REST 1m data; WebSocket/native higher-timeframe candles are telemetry only.
+13. Live sizing uses the lower of canonical and actual realized equity; either live daily-loss ledger can halt new risk.
+14. Development, validation, and final holdout periods are separated before testing.
+15. No parameter is changed after seeing holdout results without creating a new strategy version.
+16. Demo/live must reuse the same strategy core as the backtester.
 
 ## Planned workflow
 
@@ -79,4 +82,4 @@ Planned data classes:
 - official U.S. CPI and Employment Situation release schedules from BLS;
 - FOMC meeting / statement calendar from the Federal Reserve.
 
-See [docs/DATA_CONTRACT.md](docs/DATA_CONTRACT.md) for the audit requirements and known limitations.
+See [docs/DATA_CONTRACT_V0.1.2.md](docs/DATA_CONTRACT_V0.1.2.md) for the audit requirements and known limitations.
