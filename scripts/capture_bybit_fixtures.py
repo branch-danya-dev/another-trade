@@ -9,7 +9,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-BASE_URL = "https://api.bybit.com"
+CANDIDATE_BASE_URLS = [\n    "https://api.bybit.eu",\n    "https://api.bytick.com",\n    "https://api-testnet.bybit.com",\n    "https://api.bybit.com",\n]\nBASE_URL = ""
 OUT = Path("tests/fixtures/bybit")
 USER_AGENT = "another-trade-data-audit/0.1 fixture-capture"
 
