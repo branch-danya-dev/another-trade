@@ -1,0 +1,43 @@
+{
+  "base_url": "https://api.bybit.com",
+  "captured_at_ms": 1790803551487,
+  "closed_fixture_symbol": "10000000AIDOGEUSDT",
+  "files": [
+    {
+      "file": "instruments_trading.json",
+      "http_status": 200,
+      "sha256": "c808c3ae18392be28df8d9a85b9474a304535e1cfa123747a7335e3ee539aab4",
+      "url": "https://api.bybit.com/v5/market/instruments-info?category=linear&status=Trading&limit=100"
+    },
+    {
+      "file": "instruments_closed.json",
+      "http_status": 200,
+      "sha256": "80dcd066f622daa76cb585d2c3fa8f49e26a2e084935aae866845b854bddd988",
+      "url": "https://api.bybit.com/v5/market/instruments-info?category=linear&status=Closed&limit=1000"
+    },
+    {
+      "file": "kline_closed_symbol.json",
+      "http_status": 200,
+      "sha256": "df09fc3b8e067b31ba678a31f8e9b5d9c954d2126592a9ba60c8c69710bfb0d4",
+      "url": "https://api.bybit.com/v5/market/kline?category=linear&symbol=10000000AIDOGEUSDT&interval=1&start=1745807340000&end=1745809140000&limit=100"
+    },
+    {
+      "file": "funding_closed_symbol.json",
+      "http_status": 200,
+      "sha256": "9aea150792ec98ce60a1c1ed4a0f9706ba710ebfa8ab1a4ba287ff712a346784",
+      "url": "https://api.bybit.com/v5/market/funding/history?category=linear&symbol=10000000AIDOGEUSDT&endTime=1745809199999&limit=20"
+    },
+    {
+      "file": "kline_trading_symbol.json",
+      "http_status": 200,
+      "sha256": "5c630351ea49fa6359959fd757bdef8b184b43c5b5985ba7573c51d16fc69c8b",
+      "url": "https://api.bybit.com/v5/market/kline?category=linear&symbol=BTCUSDT&interval=1&start=1790802780000&end=1790803380000&limit=20"
+    },
+    {
+      "file": "retcode_error.json",
+      "http_status": 200,
+      "sha256": "2c9c403d6998ab222c6782d041d300490716cebafda08b720d4b9db2d14b3c48",
+      "url": "https://api.bybit.com/v5/market/kline?category=linear&symbol=THIS_SYMBOL_MUST_NOT_EXIST_USDT&interval=1&limit=1"
+    }
+  ]
+}
