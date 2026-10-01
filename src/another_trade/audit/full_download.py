@@ -34,6 +34,8 @@ STRATEGY_HOLDOUT_END_MS = utc_ms(datetime(2026, 9, 30, tzinfo=UTC))
 FUNDING_LIMIT = 200
 MARK_SAMPLE_DENOMINATOR = 100
 DELIVERY_INDEX_LOOKBACK_MS = 120 * MINUTE_MS
+BULK_KLINE_FETCH_WORKERS = 6
+BULK_RAW_COMMIT_EVERY = 16
 
 
 @dataclass(frozen=True, slots=True)
@@ -726,10 +728,19 @@ def process_full_partition(
         now_ms=now_ms,
         data_start_ms=task.data_start_ms,
         data_end_ms=task.data_end_ms,
+        raw_store_profile="bulk",
+        raw_commit_every=BULK_RAW_COMMIT_EVERY,
+        fetch_workers=BULK_KLINE_FETCH_WORKERS,
     )
 
     raw_path = run_dir / "raw" / task.symbol / f"{task.month}.sqlite3"
-    with RawPageStore(raw_path, symbol=task.symbol, month=task.month) as store:
+    with RawPageStore(
+        raw_path,
+        symbol=task.symbol,
+        month=task.month,
+        profile="bulk",
+        commit_every=BULK_RAW_COMMIT_EVERY,
+    ) as store:
         funding = download_funding_month(
             client,
             store,
