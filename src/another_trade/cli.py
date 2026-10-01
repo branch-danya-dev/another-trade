@@ -20,7 +20,6 @@ from another_trade.audit.bulk_pilot import (
     parse_month,
     pilot_symbol_diagnostics,
     select_default_pilot_symbols,
-    select_fast_funding_symbols,
     write_pilot_summary,
 )
 from another_trade.audit.coverage import (
@@ -244,12 +243,6 @@ def bulk_pilot(
                 "spec_version": SPEC_VERSION,
                 "data_contract_version": DATA_CONTRACT_VERSION,
                 "selected_symbols": selected,
-                "mark_stress_symbols": select_fast_funding_symbols(
-                    snapshot,
-                    bounds,
-                    exclude=selected,
-                    count=2,
-                ),
                 "requests_per_second": client.requests_per_second,
                 "parquet_writer_config": PARQUET_WRITER_CONFIG,
                 "software_versions": {
@@ -353,31 +346,6 @@ def bulk_pilot(
                     )
                 diagnostics.append(diagnostic)
 
-            stress_diagnostics = []
-            raw_stress_symbols = manifest.get("mark_stress_symbols", [])
-            if not isinstance(raw_stress_symbols, list):
-                raise typer.BadParameter("manifest mark_stress_symbols must be a list")
-            for symbol in [str(item) for item in raw_stress_symbols]:
-                stress_path = run_dir / "mark-stress-diagnostics" / f"{symbol}.json"
-                if stress_path.exists():
-                    stress = json.loads(stress_path.read_text(encoding="utf-8"))
-                else:
-                    stress = mark_price_only_diagnostics(
-                        client,
-                        symbol=symbol,
-                        bounds=bounds,
-                        run_dir=run_dir,
-                        now_ms=now_ms,
-                    )
-                    atomic_write_bytes(
-                        stress_path,
-                        json.dumps(stress, indent=2, sort_keys=True).encode("utf-8"),
-                    )
-                stress_diagnostics.append(stress)
-            atomic_write_bytes(
-                run_dir / "mark-stress-diagnostics.json",
-                json.dumps(stress_diagnostics, indent=2, sort_keys=True).encode("utf-8"),
-            )
         except PilotAbort as exc:
             manifest["status"] = "INTENTIONALLY_ABORTED"
             manifest["abort_message"] = str(exc)
@@ -492,6 +460,27 @@ def bulk_boundary_pilot(
                 data_end_ms=end_ms,
             )
             artifacts.append(artifact)
+            lifetime_bounds = type(bounds)(
+                label=bounds.label,
+                start_ms=start_ms,
+                end_ms=end_ms,
+            )
+            boundary_diagnostic = mark_price_only_diagnostics(
+                client,
+                symbol=symbol,
+                bounds=lifetime_bounds,
+                run_dir=run_dir,
+                now_ms=now_ms,
+            )
+            diagnostic_path = run_dir / "diagnostics" / f"{symbol}.json"
+            atomic_write_bytes(
+                diagnostic_path,
+                json.dumps(
+                    boundary_diagnostic,
+                    indent=2,
+                    sort_keys=True,
+                ).encode("utf-8"),
+            )
             lifetime_rows.append(
                 {
                     "symbol": symbol,
@@ -531,6 +520,142 @@ def bulk_boundary_pilot(
     )
     typer.echo(f"boundary pilot complete: {run_dir}")
     typer.echo(f"overlap hours: {overlap_ms / 3_600_000:.3f}")
+
+
+@audit_app.command("funding-mark-pilot")
+def funding_mark_pilot(
+    probes: Annotated[
+        str,
+        typer.Option(
+            help=(
+                "Comma-separated SYMBOL:YYYY-MM probes. "
+                "Defaults target historically observed short-funding regimes."
+            )
+        ),
+    ] = (
+        "GSTUSDT:2022-06,MINAUSDT:2024-06,"
+        "TRBUSDT:2024-08,SCUSDT:2024-03"
+    ),
+    artifact_dir: Annotated[Path, typer.Option()] = Path("artifacts/data-audit"),
+) -> None:
+    parsed: list[tuple[str, str]] = []
+    for item in probes.split(","):
+        value = item.strip()
+        if not value:
+            continue
+        if ":" not in value:
+            raise typer.BadParameter(
+                f"invalid probe {value!r}; expected SYMBOL:YYYY-MM"
+            )
+        symbol, month = value.split(":", 1)
+        parsed.append((symbol.strip().upper(), month.strip()))
+    if not parsed:
+        raise typer.BadParameter("at least one funding/mark probe is required")
+
+    now_ms = time.time_ns() // 1_000_000
+    run_id = f"{now_ms}-historical-funding-mark"
+    run_dir = artifact_dir / "funding-mark-pilot" / run_id
+    run_dir.mkdir(parents=True, exist_ok=False)
+
+    rows: list[dict[str, object]] = []
+    with BybitPublicClient(cache_dir=None) as client:
+        snapshot = collect_inventory(client)
+        by_symbol = {item.symbol: item for item in snapshot.instruments}
+
+        for symbol, month in parsed:
+            bounds = parse_month(month)
+            development_end = parse_month("2025-01").start_ms
+            if bounds.end_ms > development_end:
+                raise typer.BadParameter(
+                    f"{symbol}:{month} is outside development data"
+                )
+            if symbol not in by_symbol:
+                rows.append(
+                    {
+                        "symbol": symbol,
+                        "month": month,
+                        "status": "MISSING_FROM_CURRENT_INVENTORY",
+                    }
+                )
+                continue
+
+            diagnostic = mark_price_only_diagnostics(
+                client,
+                symbol=symbol,
+                bounds=bounds,
+                run_dir=run_dir,
+                now_ms=now_ms,
+            )
+            mark = diagnostic["mark_price_funding_open_comparison"]
+            if not isinstance(mark, dict):
+                raise RuntimeError("invalid mark-price diagnostic shape")
+            observed = mark.get("observed_funding_intervals_minutes", [])
+            if not isinstance(observed, list):
+                raise RuntimeError("invalid observed funding interval list")
+            observed_ints = [int(value) for value in observed]
+            qualifies_fast = bool(observed_ints) and min(observed_ints) <= 240
+            funding_count = int(mark.get("funding_event_count", 0))
+            comparison_count = int(mark.get("sample_count", 0))
+            hour_aligned_count = int(mark.get("hour_aligned_count", 0))
+            all_equal = bool(mark.get("all_equal", False))
+            complete_comparison = (
+                funding_count > 0
+                and comparison_count == funding_count
+                and hour_aligned_count == funding_count
+            )
+            row = {
+                "symbol": symbol,
+                "month": month,
+                "current_funding_interval_minutes": by_symbol[symbol].fundingInterval,
+                "observed_funding_intervals_minutes": observed_ints,
+                "qualifies_fast": qualifies_fast,
+                "funding_event_count": funding_count,
+                "comparison_count": comparison_count,
+                "hour_aligned_count": hour_aligned_count,
+                "all_equal": all_equal,
+                "complete_comparison": complete_comparison,
+                "aux_raw_count": diagnostic.get("aux_raw_count"),
+                "aux_payload_index_sha256": diagnostic.get(
+                    "aux_payload_index_sha256"
+                ),
+            }
+            rows.append(row)
+            atomic_write_bytes(
+                run_dir / "diagnostics" / f"{symbol}-{month}.json",
+                json.dumps(diagnostic, indent=2, sort_keys=True).encode("utf-8"),
+            )
+
+    qualifying = [
+        row
+        for row in rows
+        if row.get("qualifies_fast") is True
+        and row.get("complete_comparison") is True
+        and row.get("all_equal") is True
+    ]
+    manifest = {
+        "run_id": run_id,
+        "kind": "funding-mark-pilot",
+        "created_at_ms": now_ms,
+        "git_commit_sha": _git_commit_sha(),
+        "spec_version": SPEC_VERSION,
+        "data_contract_version": DATA_CONTRACT_VERSION,
+        "inventory_sha256": snapshot.sha256,
+        "requested_probes": [
+            {"symbol": symbol, "month": month}
+            for symbol, month in parsed
+        ],
+        "results": rows,
+        "qualifying_fast_count": len(qualifying),
+        "gate_pass": len(qualifying) >= 2,
+    }
+    atomic_write_bytes(
+        run_dir / "manifest.json",
+        json.dumps(manifest, indent=2, sort_keys=True).encode("utf-8"),
+    )
+    typer.echo(f"funding/mark pilot complete: {run_dir}")
+    typer.echo(f"qualifying historical fast-funding probes: {len(qualifying)}")
+    if len(qualifying) < 2:
+        raise typer.Exit(code=5)
 
 
 if __name__ == "__main__":
