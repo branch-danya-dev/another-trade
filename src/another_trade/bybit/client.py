@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -105,6 +106,7 @@ class BybitPublicClient:
         self.sleep = sleep
         self.monotonic = monotonic
         self._last_request_at: float | None = None
+        self._throttle_lock = threading.Lock()
         self.http = httpx.Client(
             base_url=self.base_url,
             timeout=timeout_s,
@@ -135,12 +137,15 @@ class BybitPublicClient:
         if not self.requests_per_second or self.requests_per_second <= 0:
             return
         minimum = 1.0 / self.requests_per_second
-        now = self.monotonic()
-        if self._last_request_at is not None:
-            wait = minimum - (now - self._last_request_at)
-            if wait > 0:
-                self.sleep(wait)
-        self._last_request_at = self.monotonic()
+        # Multiple bulk-download worker threads may share one client. Serialize
+        # only request-start scheduling; responses remain concurrent.
+        with self._throttle_lock:
+            now = self.monotonic()
+            if self._last_request_at is not None:
+                wait = minimum - (now - self._last_request_at)
+                if wait > 0:
+                    self.sleep(wait)
+            self._last_request_at = self.monotonic()
 
     @staticmethod
     def _params(params: Mapping[str, str | int | None]) -> dict[str, str | int]:
