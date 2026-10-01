@@ -1,6 +1,6 @@
 # Validation Protocol v0.2.9
 
-Status: **PRE-REGISTERED**
+Status: **SUPERSEDED BY [v0.2.10](VALIDATION_PROTOCOL_V0.2.10.md) BEFORE VALIDATION OPENED**
 
 This document defines when strategy v0.2.6 is considered PASS, FAIL, or INCONCLUSIVE.
 
