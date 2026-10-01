@@ -11,16 +11,12 @@ from pathlib import Path
 from typing import cast
 
 from another_trade.audit.bulk_pilot import (
-    DAY_MS,
     HOUR_MS,
     MINUTE_MS,
     MonthBounds,
-    PartitionArtifact,
-    PartitionStatus,
     RawPageStore,
     download_symbol_month,
     parse_month,
-    partition_status,
 )
 from another_trade.audit.coverage import discover_first_trade_ms
 from another_trade.audit.inventory import currently_eligible_crypto_perpetual
