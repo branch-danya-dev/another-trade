@@ -354,7 +354,10 @@ def bulk_pilot(
                 diagnostics.append(diagnostic)
 
             stress_diagnostics = []
-            for symbol in [str(item) for item in manifest.get("mark_stress_symbols", [])]:
+            raw_stress_symbols = manifest.get("mark_stress_symbols", [])
+            if not isinstance(raw_stress_symbols, list):
+                raise typer.BadParameter("manifest mark_stress_symbols must be a list")
+            for symbol in [str(item) for item in raw_stress_symbols]:
                 stress_path = run_dir / "mark-stress-diagnostics" / f"{symbol}.json"
                 if stress_path.exists():
                     stress = json.loads(stress_path.read_text(encoding="utf-8"))
