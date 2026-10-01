@@ -5,7 +5,7 @@ from pathlib import Path
 
 import httpx
 
-from another_trade.audit.bulk_pilot import MonthBounds, RawPageStore, parse_month
+from another_trade.audit.bulk_pilot import RawPageStore, parse_month
 from another_trade.audit.full_download import (
     FULL_DATA_START_MS,
     FullPartitionTask,
