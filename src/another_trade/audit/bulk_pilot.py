@@ -596,7 +596,10 @@ def _canonical_decimal(value: Decimal) -> str:
 
     quantum = Decimal("0.000000000000000001")
     digits = len(value.as_tuple().digits)
-    exponent = value.as_tuple().exponent
+    exponent_value = value.as_tuple().exponent
+    if not isinstance(exponent_value, int):
+        raise ValueError(f"invalid finite Decimal exponent: {exponent_value!r}")
+    exponent = exponent_value
     with localcontext() as ctx:
         # Python Decimal defaults to precision=28. A valid decimal128(38,18)
         # value can legitimately require up to 38 significant digits once it
