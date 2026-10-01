@@ -8,7 +8,7 @@ import time
 from collections.abc import Iterator, Sequence
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
-from decimal import Decimal
+from decimal import Decimal, localcontext
 from enum import StrEnum
 from itertools import pairwise
 from pathlib import Path
@@ -591,10 +591,28 @@ class RawPageStore:
 
 
 def _canonical_decimal(value: Decimal) -> str:
+    if not value.is_finite():
+        raise ValueError(f"non-finite decimal is forbidden: {value}")
+
     quantum = Decimal("0.000000000000000001")
-    normalized = value.quantize(quantum)
+    digits = len(value.as_tuple().digits)
+    exponent = value.as_tuple().exponent
+    with localcontext() as ctx:
+        # Python Decimal defaults to precision=28. A valid decimal128(38,18)
+        # value can legitimately require up to 38 significant digits once it
+        # is padded to the frozen 18-decimal scale. Use a local context large
+        # enough to validate/serialize the storage contract without rounding.
+        ctx.prec = max(38, digits + abs(exponent) + 20)
+        normalized = value.quantize(quantum)
+
     if normalized != value:
         raise ValueError(f"decimal {value} exceeds fixed 18-decimal storage scale")
+
+    integer_digits = 1 if normalized == 0 else max(0, normalized.copy_abs().adjusted() + 1)
+    if integer_digits > 20:
+        raise ValueError(
+            f"decimal {value} exceeds decimal128(38,18) integer precision"
+        )
     return format(normalized, "f")
 
 
@@ -636,6 +654,7 @@ def write_partition_parquet(
     path: Path,
 ) -> tuple[str, str]:
     ordered = sorted(candles, key=lambda item: item.start_ms)
+    logical_hash = logical_content_sha256(symbol, ordered)
     schema = _arrow_schema()
     table = pa.Table.from_arrays(
         [
@@ -664,7 +683,7 @@ def write_partition_parquet(
     )
     tmp.replace(path)
     file_hash = hashlib.sha256(path.read_bytes()).hexdigest()
-    return logical_content_sha256(symbol, ordered), file_hash
+    return logical_hash, file_hash
 
 
 def _parse_store_candles(
