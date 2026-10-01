@@ -5,6 +5,7 @@ import hashlib
 import json
 import sqlite3
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections.abc import Iterator, Sequence
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
@@ -18,7 +19,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from another_trade.audit.inventory import InventorySnapshot, currently_eligible_crypto_perpetual
-from another_trade.bybit.client import BybitPublicClient
+from another_trade.bybit.client import BybitPublicClient, RawKlinePage
 from another_trade.bybit.models import FundingItem, Instrument, Kline
 from another_trade.io import atomic_write_bytes
 from another_trade.time import interval_ms, utc_ms
@@ -255,12 +256,33 @@ def _canonical_params(params: dict[str, str | int]) -> str:
 
 
 class RawPageStore:
-    def __init__(self, path: Path, *, symbol: str, month: str) -> None:
+    def __init__(
+        self,
+        path: Path,
+        *,
+        symbol: str,
+        month: str,
+        profile: str = "durable",
+        commit_every: int = 1,
+    ) -> None:
+        if profile not in {"durable", "bulk"}:
+            raise ValueError("raw store profile must be 'durable' or 'bulk'")
+        if commit_every < 1:
+            raise ValueError("commit_every must be >= 1")
+
         path.parent.mkdir(parents=True, exist_ok=True)
         self.path = path
+        self.profile = profile
+        self.commit_every = commit_every
+        self._pending_writes = 0
         self.conn = sqlite3.connect(path)
-        self.conn.execute("PRAGMA journal_mode=DELETE")
-        self.conn.execute("PRAGMA synchronous=FULL")
+        if profile == "bulk":
+            self.conn.execute("PRAGMA journal_mode=WAL")
+            self.conn.execute("PRAGMA synchronous=NORMAL")
+            self.conn.execute("PRAGMA wal_autocheckpoint=1000")
+        else:
+            self.conn.execute("PRAGMA journal_mode=DELETE")
+            self.conn.execute("PRAGMA synchronous=FULL")
         self.conn.execute(
             """
             CREATE TABLE IF NOT EXISTS metadata (
@@ -323,8 +345,22 @@ class RawPageStore:
                 f"raw container metadata mismatch for {key}: {row[0]!r} != {value!r}"
             )
 
+    def flush(self) -> None:
+        if self._pending_writes > 0:
+            self.conn.commit()
+            self._pending_writes = 0
+
+    def _after_write(self) -> None:
+        self._pending_writes += 1
+        if self._pending_writes >= self.commit_every:
+            self.flush()
+
     def close(self) -> None:
-        self.conn.commit()
+        self.flush()
+        if self.profile == "bulk":
+            # Keep crash recovery cheap while the partition is open, then fold
+            # the WAL back into the main file at the partition boundary.
+            self.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         self.conn.close()
 
     def __enter__(self) -> RawPageStore:
@@ -376,7 +412,7 @@ class RawPageStore:
                 captured_at_ms,
             ),
         )
-        self.conn.commit()
+        self._after_write()
 
     def read_raw(self, start_ms: int) -> bytes:
         row = self.conn.execute(
@@ -450,7 +486,7 @@ class RawPageStore:
                 captured_at_ms,
             ),
         )
-        self.conn.commit()
+        self._after_write()
 
     def read_aux(self, *, endpoint: str, params: dict[str, str | int]) -> bytes:
         request_key = self._request_key(endpoint, params)
@@ -1016,6 +1052,9 @@ def download_symbol_month(
     data_end_ms: int | None = None,
     abort_counter: list[int] | None = None,
     abort_after_pages: int | None = None,
+    raw_store_profile: str = "durable",
+    raw_commit_every: int = 1,
+    fetch_workers: int = 1,
 ) -> PartitionArtifact:
     effective_start = bounds.start_ms if data_start_ms is None else data_start_ms
     effective_end = bounds.end_ms if data_end_ms is None else data_end_ms
@@ -1034,13 +1073,32 @@ def download_symbol_month(
     raw_path = run_dir / "raw" / symbol / f"{bounds.label}.sqlite3"
     parquet_path = run_dir / "parquet" / symbol / f"{bounds.label}.parquet"
 
+    if fetch_workers < 1:
+        raise ValueError("fetch_workers must be >= 1")
+
     reused_pages = 0
     downloaded_pages = 0
-    with RawPageStore(raw_path, symbol=symbol, month=bounds.label) as store:
+    with RawPageStore(
+        raw_path,
+        symbol=symbol,
+        month=bounds.label,
+        profile=raw_store_profile,
+        commit_every=raw_commit_every,
+    ) as store:
+        missing_windows: list[PageWindow] = []
         for window in page_windows(data_bounds):
             if store.has_page(window.start_ms):
                 reused_pages += 1
-                continue
+            else:
+                missing_windows.append(window)
+
+        # The intentional-abort pilot remains strictly sequential so its page
+        # count is exact. Full bulk runs may overlap network latency.
+        effective_workers = (
+            1 if abort_after_pages is not None else min(fetch_workers, len(missing_windows))
+        )
+
+        def fetch_page(window: PageWindow) -> tuple[PageWindow, RawKlinePage]:
             page = client.kline_page_with_raw(
                 symbol=symbol,
                 start_ms=window.start_ms,
@@ -1049,22 +1107,57 @@ def download_symbol_month(
                 limit=1000,
                 now_ms=now_ms,
             )
-            store.put_page(
-                window=window,
-                endpoint=page.endpoint,
-                params=page.params,
-                raw=page.raw,
-                raw_rows=page.series.raw_row_count,
-                captured_at_ms=time.time_ns() // 1_000_000,
-            )
-            downloaded_pages += 1
-            if abort_counter is not None:
-                abort_counter[0] += 1
-                if abort_after_pages is not None and abort_counter[0] >= abort_after_pages:
-                    raise PilotAbort(
-                        f"intentional pilot abort after {abort_counter[0]} newly committed pages"
-                    )
+            return window, page
 
+        if effective_workers <= 1:
+            for window in missing_windows:
+                _, raw_page = fetch_page(window)
+                store.put_page(
+                    window=window,
+                    endpoint=raw_page.endpoint,
+                    params=raw_page.params,
+                    raw=raw_page.raw,
+                    raw_rows=raw_page.series.raw_row_count,
+                    captured_at_ms=time.time_ns() // 1_000_000,
+                )
+                downloaded_pages += 1
+                if abort_counter is not None:
+                    abort_counter[0] += 1
+                    if (
+                        abort_after_pages is not None
+                        and abort_counter[0] >= abort_after_pages
+                    ):
+                        raise PilotAbort(
+                            "intentional pilot abort after "
+                            f"{abort_counter[0]} newly committed pages"
+                        )
+        elif missing_windows:
+            first_error: Exception | None = None
+            with ThreadPoolExecutor(max_workers=effective_workers) as executor:
+                futures = {
+                    executor.submit(fetch_page, window): window
+                    for window in missing_windows
+                }
+                for future in as_completed(futures):
+                    try:
+                        window, raw_page = future.result()
+                    except Exception as exc:  # preserve other completed pages first
+                        if first_error is None:
+                            first_error = exc
+                        continue
+                    store.put_page(
+                        window=window,
+                        endpoint=raw_page.endpoint,
+                        params=raw_page.params,
+                        raw=raw_page.raw,
+                        raw_rows=raw_page.series.raw_row_count,
+                        captured_at_ms=time.time_ns() // 1_000_000,
+                    )
+                    downloaded_pages += 1
+            if first_error is not None:
+                raise first_error
+
+        store.flush()
         candles = _parse_store_candles(client, store, data_bounds, now_ms=now_ms)
         raw_hash = store.logical_index_sha256()
         payload_hash = store.payload_index_sha256()
