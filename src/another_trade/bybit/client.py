@@ -77,6 +77,14 @@ class RawFundingPage:
     params: dict[str, str | int]
 
 
+@dataclass(frozen=True, slots=True)
+class RawIndexPricePage:
+    series: MarkPriceSeries
+    raw: bytes
+    endpoint: str
+    params: dict[str, str | int]
+
+
 class BybitPublicClient:
     def __init__(
         self,
@@ -575,6 +583,62 @@ class BybitPublicClient:
         now_ms: int | None = None,
     ) -> MarkPriceSeries:
         return self.mark_price_page_with_raw(
+            symbol=symbol,
+            start_ms=start_ms,
+            end_ms=end_ms,
+            interval=interval,
+            limit=limit,
+            now_ms=now_ms,
+        ).series
+
+    def index_price_page_with_raw(
+        self,
+        *,
+        symbol: str,
+        start_ms: int,
+        end_ms: int,
+        interval: str = "1",
+        limit: int = 1000,
+        now_ms: int | None = None,
+    ) -> RawIndexPricePage:
+        if limit < 1 or limit > 1000:
+            raise ValueError("Bybit index-price kline limit must be 1..1000")
+        self._validate_kline_range(start_ms, end_ms, interval)
+
+        now_value = int(time.time() * 1000) if now_ms is None else now_ms
+        step = interval_ms(interval)
+        immutable_before = now_value - CACHE_IMMUTABILITY_HORIZON_MS
+        params: dict[str, str | int] = {
+            "category": "linear",
+            "symbol": symbol,
+            "interval": interval,
+            "start": start_ms,
+            "end": end_ms,
+            "limit": limit,
+        }
+        raw = self._request_raw(
+            "/v5/market/index-price-kline",
+            params,
+            cacheable=end_ms + step <= immutable_before,
+        )
+        return RawIndexPricePage(
+            series=self._parse_mark_price_raw(raw, interval=interval, now_ms=now_value),
+            raw=raw,
+            endpoint="/v5/market/index-price-kline",
+            params=params,
+        )
+
+    def index_price_page(
+        self,
+        *,
+        symbol: str,
+        start_ms: int,
+        end_ms: int,
+        interval: str = "1",
+        limit: int = 1000,
+        now_ms: int | None = None,
+    ) -> MarkPriceSeries:
+        return self.index_price_page_with_raw(
             symbol=symbol,
             start_ms=start_ms,
             end_ms=end_ms,
