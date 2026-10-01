@@ -26,7 +26,7 @@ from another_trade.time import interval_ms, utc_ms
 MINUTE_MS = 60_000
 HOUR_MS = 3_600_000
 DAY_MS = 86_400_000
-RAW_SCHEMA_VERSION = 2
+RAW_SCHEMA_VERSION = 3
 PARQUET_SCHEMA_VERSION = 2
 DECIMAL_TYPE = pa.decimal128(38, 18)
 PARQUET_COMPRESSION = "zstd"
@@ -95,6 +95,7 @@ class PartitionArtifact:
     logical_content_sha256: str
     parquet_file_sha256: str
     raw_index_sha256: str
+    payload_index_sha256: str
     raw_page_count: int
     parquet_path: str
     raw_container_path: str
@@ -228,6 +229,27 @@ def select_fast_funding_symbols(
     return [item.symbol for item in candidates[:count]]
 
 
+def payload_sha256(raw: bytes) -> str:
+    try:
+        decoded = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"cannot canonicalize API payload: {exc}") from exc
+    if not isinstance(decoded, dict):
+        raise ValueError("API payload must be a JSON object")
+    semantic = {
+        key: decoded.get(key)
+        for key in ("retCode", "retMsg", "result")
+        if key in decoded
+    }
+    canonical = json.dumps(
+        semantic,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
+
+
 def _canonical_params(params: dict[str, str | int]) -> str:
     return json.dumps(params, sort_keys=True, separators=(",", ":"))
 
@@ -255,6 +277,7 @@ class RawPageStore:
                 endpoint TEXT NOT NULL,
                 params_json TEXT NOT NULL,
                 raw_sha256 TEXT NOT NULL,
+                payload_sha256 TEXT NOT NULL,
                 raw_gzip BLOB NOT NULL,
                 raw_bytes INTEGER NOT NULL,
                 raw_rows INTEGER NOT NULL,
@@ -272,6 +295,7 @@ class RawPageStore:
                 endpoint TEXT NOT NULL,
                 params_json TEXT NOT NULL,
                 raw_sha256 TEXT NOT NULL,
+                payload_sha256 TEXT NOT NULL,
                 raw_gzip BLOB NOT NULL,
                 raw_bytes INTEGER NOT NULL,
                 raw_rows INTEGER NOT NULL,
@@ -329,13 +353,14 @@ class RawPageStore:
         captured_at_ms: int,
     ) -> None:
         digest = hashlib.sha256(raw).hexdigest()
+        semantic_digest = payload_sha256(raw)
         compressed = gzip.compress(raw, compresslevel=6, mtime=0)
         self.conn.execute(
             """
             INSERT INTO responses(
                 page_start_ms, page_end_ms, endpoint, params_json, raw_sha256,
-                raw_gzip, raw_bytes, raw_rows, captured_at_ms
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                payload_sha256, raw_gzip, raw_bytes, raw_rows, captured_at_ms
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(page_start_ms) DO NOTHING
             """,
             (
@@ -344,6 +369,7 @@ class RawPageStore:
                 endpoint,
                 _canonical_params(params),
                 digest,
+                semantic_digest,
                 compressed,
                 len(raw),
                 raw_rows,
@@ -398,14 +424,15 @@ class RawPageStore:
     ) -> None:
         request_key = self._request_key(endpoint, params)
         digest = hashlib.sha256(raw).hexdigest()
+        semantic_digest = payload_sha256(raw)
         compressed = gzip.compress(raw, compresslevel=6, mtime=0)
         self.conn.execute(
             """
             INSERT INTO aux_responses(
                 request_key, stream, range_start_ms, range_end_ms, endpoint,
-                params_json, raw_sha256, raw_gzip, raw_bytes, raw_rows,
+                params_json, raw_sha256, payload_sha256, raw_gzip, raw_bytes, raw_rows,
                 captured_at_ms
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(request_key) DO NOTHING
             """,
             (
@@ -416,6 +443,7 @@ class RawPageStore:
                 endpoint,
                 _canonical_params(params),
                 digest,
+                semantic_digest,
                 compressed,
                 len(raw),
                 raw_rows,
@@ -446,7 +474,7 @@ class RawPageStore:
         rows = self.conn.execute(
             """
             SELECT request_key, stream, range_start_ms, range_end_ms, endpoint,
-                   params_json, raw_sha256, raw_bytes, raw_rows
+                   params_json, raw_sha256, payload_sha256, raw_bytes, raw_rows
             FROM aux_responses
             ORDER BY stream, range_start_ms, endpoint, params_json
             """
@@ -461,8 +489,65 @@ class RawPageStore:
                     "endpoint": row[4],
                     "params_json": row[5],
                     "raw_sha256": row[6],
-                    "raw_bytes": row[7],
-                    "raw_rows": row[8],
+                    "payload_sha256": row[7],
+                    "raw_bytes": row[8],
+                    "raw_rows": row[9],
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+            h.update(line)
+            h.update(b"\n")
+        return h.hexdigest()
+
+    def payload_index_sha256(self) -> str:
+        h = hashlib.sha256()
+        rows = self.conn.execute(
+            """
+            SELECT page_start_ms, page_end_ms, endpoint, params_json, payload_sha256,
+                   raw_rows
+            FROM responses
+            ORDER BY page_start_ms
+            """
+        )
+        for row in rows:
+            line = json.dumps(
+                {
+                    "page_start_ms": row[0],
+                    "page_end_ms": row[1],
+                    "endpoint": row[2],
+                    "params_json": row[3],
+                    "payload_sha256": row[4],
+                    "raw_rows": row[5],
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+            h.update(line)
+            h.update(b"\n")
+        return h.hexdigest()
+
+    def aux_payload_index_sha256(self) -> str:
+        h = hashlib.sha256()
+        rows = self.conn.execute(
+            """
+            SELECT request_key, stream, range_start_ms, range_end_ms, endpoint,
+                   params_json, payload_sha256, raw_rows
+            FROM aux_responses
+            ORDER BY stream, range_start_ms, endpoint, params_json
+            """
+        )
+        for row in rows:
+            line = json.dumps(
+                {
+                    "request_key": row[0],
+                    "stream": row[1],
+                    "range_start_ms": row[2],
+                    "range_end_ms": row[3],
+                    "endpoint": row[4],
+                    "params_json": row[5],
+                    "payload_sha256": row[6],
+                    "raw_rows": row[7],
                 },
                 sort_keys=True,
                 separators=(",", ":"),
@@ -480,7 +565,7 @@ class RawPageStore:
         rows = self.conn.execute(
             """
             SELECT page_start_ms, page_end_ms, endpoint, params_json, raw_sha256,
-                   raw_bytes, raw_rows
+                   payload_sha256, raw_bytes, raw_rows
             FROM responses
             ORDER BY page_start_ms
             """
@@ -493,8 +578,9 @@ class RawPageStore:
                     "endpoint": row[2],
                     "params_json": row[3],
                     "raw_sha256": row[4],
-                    "raw_bytes": row[5],
-                    "raw_rows": row[6],
+                    "payload_sha256": row[5],
+                    "raw_bytes": row[6],
+                    "raw_rows": row[7],
                 },
                 sort_keys=True,
                 separators=(",", ":"),
@@ -959,6 +1045,7 @@ def download_symbol_month(
 
         candles = _parse_store_candles(client, store, data_bounds, now_ms=now_ms)
         raw_hash = store.logical_index_sha256()
+        payload_hash = store.payload_index_sha256()
         raw_count = store.page_count()
 
     missing = missing_minute_starts(data_bounds, candles)
@@ -981,6 +1068,7 @@ def download_symbol_month(
         logical_content_sha256=logical_hash,
         parquet_file_sha256=parquet_hash,
         raw_index_sha256=raw_hash,
+        payload_index_sha256=payload_hash,
         raw_page_count=raw_count,
         parquet_path=parquet_path.relative_to(run_dir).as_posix(),
         raw_container_path=raw_path.relative_to(run_dir).as_posix(),
@@ -1039,12 +1127,14 @@ def pilot_symbol_diagnostics(
         )
         aux_count = store.aux_count()
         aux_hash = store.aux_index_sha256()
+        aux_payload_hash = store.aux_payload_index_sha256()
     return {
         "symbol": symbol,
         "aggregation": aggregation,
         "mark_price_funding_open_comparison": mark,
         "aux_raw_count": aux_count,
         "aux_raw_index_sha256": aux_hash,
+        "aux_payload_index_sha256": aux_payload_hash,
     }
 
 
@@ -1111,6 +1201,9 @@ def compare_pilot_runs(
         parquet_equal = (
             left["parquet_file_sha256"] == right["parquet_file_sha256"]
         )
+        payload_index_equal = (
+            left.get("payload_index_sha256") == right.get("payload_index_sha256")
+        )
         all_logical_equal = all_logical_equal and logical_equal
         all_parquet_equal = all_parquet_equal and parquet_equal
         rows.append(
@@ -1118,6 +1211,7 @@ def compare_pilot_runs(
                 "symbol": symbol,
                 "logical_equal": logical_equal,
                 "parquet_equal": parquet_equal,
+                "payload_index_equal": payload_index_equal,
                 "reference_logical_sha256": left["logical_content_sha256"],
                 "candidate_logical_sha256": right["logical_content_sha256"],
                 "reference_parquet_sha256": left["parquet_file_sha256"],
