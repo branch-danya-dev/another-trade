@@ -3,6 +3,8 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+import threading
+import time
 from decimal import Decimal
 from pathlib import Path
 
@@ -444,3 +446,136 @@ def test_raw_store_persists_raw_and_payload_hashes(tmp_path: Path) -> None:
 
     assert row[0] == hashlib.sha256(raw).hexdigest()
     assert row[1] == payload_sha256(raw)
+
+
+def test_bulk_store_batches_commits_until_threshold(tmp_path: Path) -> None:
+    path = tmp_path / "BTCUSDT" / "2024-06.sqlite3"
+    raw = b'{"retCode":0,"retMsg":"OK","result":{"list":[]},"time":1}'
+    params = {
+        "category": "linear",
+        "symbol": "BTCUSDT",
+        "interval": "1",
+        "start": 0,
+        "end": 0,
+        "limit": 1000,
+    }
+
+    with RawPageStore(
+        path,
+        symbol="BTCUSDT",
+        month="2024-06",
+        profile="bulk",
+        commit_every=3,
+    ) as store:
+        for index in range(2):
+            store.put_page(
+                window=PageWindow(
+                    start_ms=index * MINUTE_MS,
+                    end_ms=index * MINUTE_MS,
+                ),
+                endpoint="/v5/market/kline",
+                params={**params, "start": index * MINUTE_MS, "end": index * MINUTE_MS},
+                raw=raw,
+                raw_rows=0,
+                captured_at_ms=index,
+            )
+
+        reader = sqlite3.connect(path)
+        try:
+            count_before = reader.execute(
+                "SELECT COUNT(*) FROM responses"
+            ).fetchone()[0]
+        finally:
+            reader.close()
+        assert count_before == 0
+
+        store.put_page(
+            window=PageWindow(
+                start_ms=2 * MINUTE_MS,
+                end_ms=2 * MINUTE_MS,
+            ),
+            endpoint="/v5/market/kline",
+            params={
+                **params,
+                "start": 2 * MINUTE_MS,
+                "end": 2 * MINUTE_MS,
+            },
+            raw=raw,
+            raw_rows=0,
+            captured_at_ms=2,
+        )
+
+        reader = sqlite3.connect(path)
+        try:
+            count_after = reader.execute(
+                "SELECT COUNT(*) FROM responses"
+            ).fetchone()[0]
+        finally:
+            reader.close()
+        assert count_after == 3
+
+
+def test_parallel_kline_fetch_produces_complete_partition(tmp_path: Path) -> None:
+    start = parse_month("2024-06").start_ms
+    minute_count = 2_001
+    bounds = type(parse_month("2024-06"))(
+        label="2024-06",
+        start_ms=start,
+        end_ms=start + minute_count * MINUTE_MS,
+    )
+    lock = threading.Lock()
+    active = 0
+    max_active = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal active, max_active
+        with lock:
+            active += 1
+            max_active = max(max_active, active)
+        try:
+            time.sleep(0.02)
+            left = int(request.url.params["start"])
+            right = int(request.url.params["end"])
+            rows = [
+                [str(ts), "10", "10", "10", "10", "1", "10"]
+                for ts in range(right, left - 1, -MINUTE_MS)
+            ]
+            payload = {
+                "retCode": 0,
+                "retMsg": "OK",
+                "result": {
+                    "category": "linear",
+                    "symbol": "TESTUSDT",
+                    "list": rows,
+                },
+                "retExtInfo": {},
+                "time": 1,
+            }
+            return httpx.Response(200, json=payload, request=request)
+        finally:
+            with lock:
+                active -= 1
+
+    client = BybitPublicClient(
+        transport=httpx.MockTransport(handler),
+        requests_per_second=None,
+    )
+    try:
+        artifact = download_symbol_month(
+            client,
+            symbol="TESTUSDT",
+            bounds=bounds,
+            run_dir=tmp_path / "run",
+            now_ms=bounds.end_ms + DAY_MS,
+            raw_store_profile="bulk",
+            raw_commit_every=2,
+            fetch_workers=3,
+        )
+    finally:
+        client.close()
+
+    assert artifact.expected_minutes == minute_count
+    assert artifact.actual_minutes == minute_count
+    assert artifact.missing_minutes == 0
+    assert artifact.raw_page_count == 3
+    assert max_active >= 2
