@@ -389,7 +389,8 @@ def bulk_pilot_compare(
     typer.echo(
         "logical hashes equal: "
         f"{comparison['all_logical_equal']}; "
-        f"parquet hashes equal: {comparison['all_parquet_equal']}"
+        f"parquet hashes equal: {comparison['all_parquet_equal']}; "
+        f"payload hashes equal: {comparison['all_payload_equal']}"
     )
     typer.echo(f"written: {output}")
     if not comparison["all_logical_equal"]:
