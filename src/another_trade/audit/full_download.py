@@ -836,6 +836,8 @@ def partition_manifest_is_complete(
         row = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return False
+    if not isinstance(row, dict):
+        return False
     return (
         row.get("data_contract_partition_kind") == "FULL_HISTORICAL"
         and row.get("symbol") == task.symbol
@@ -1002,10 +1004,18 @@ def build_delisting_announcement_candidates(
                     "date_timestamp_ms": announcement.get("dateTimestamp"),
                 }
             )
+    def sort_publish_time(row: dict[str, object]) -> int:
+        value = row.get("publish_time_ms")
+        if isinstance(value, int):
+            return value
+        if isinstance(value, str) and value.isdigit():
+            return int(value)
+        return 0
+
     rows.sort(
         key=lambda row: (
             str(row["symbol"]),
-            int(row["publish_time_ms"] or 0),
+            sort_publish_time(row),
             str(row["title"]),
         )
     )
