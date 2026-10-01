@@ -912,7 +912,10 @@ def bulk_download(
         json.dumps(summary, indent=2, sort_keys=True).encode("utf-8"),
     )
 
-    completed = int(summary["completed_partition_count"])
+    completed_value = summary["completed_partition_count"]
+    if type(completed_value) is not int:
+        raise RuntimeError("structural summary completed_partition_count must be int")
+    completed = completed_value
     if completed == len(tasks):
         status = "COMPLETE"
     elif pending_open > 0 and max_partitions is None:
