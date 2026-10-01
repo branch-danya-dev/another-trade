@@ -59,6 +59,9 @@ from another_trade.time import align_down_ms
 
 SPEC_VERSION = "v0.2.6"
 DATA_CONTRACT_VERSION = "v0.1.12"
+DECIMAL_BUG_AFFECTED_FULL_DOWNLOAD_COMMIT = (
+    "682ffce6597db150687d03141224368adbfb571f"
+)
 
 app = typer.Typer(no_args_is_help=True)
 audit_app = typer.Typer(no_args_is_help=True)
@@ -702,6 +705,16 @@ def bulk_download(
             help="Optional smoke-test cap for newly processed partitions.",
         ),
     ] = None,
+    resume_decimal_bugfix: Annotated[
+        bool,
+        typer.Option(
+            "--resume-decimal-bugfix",
+            help=(
+                "Permit the one known v0.1.12 migration from commit "
+                "682ffce... after the Decimal precision crash."
+            ),
+        ),
+    ] = False,
 ) -> None:
     invocation_now_ms = time.time_ns() // 1_000_000
     git_sha = _git_commit_sha()
@@ -769,7 +782,6 @@ def bulk_download(
             manifest = manifest_value
             for key, expected in (
                 ("kind", "bulk-download"),
-                ("git_commit_sha", git_sha),
                 ("spec_version", SPEC_VERSION),
                 ("data_contract_version", DATA_CONTRACT_VERSION),
             ):
@@ -778,6 +790,51 @@ def bulk_download(
                         f"resume-run mismatch for {key}: "
                         f"{manifest.get(key)!r} != {expected!r}"
                     )
+
+            manifest_git = manifest.get("git_commit_sha")
+            if manifest_git != git_sha:
+                decimal_bugfix_allowed = (
+                    resume_decimal_bugfix
+                    and manifest_git
+                    == DECIMAL_BUG_AFFECTED_FULL_DOWNLOAD_COMMIT
+                )
+                if not decimal_bugfix_allowed:
+                    raise typer.BadParameter(
+                        "resume-run mismatch for git_commit_sha: "
+                        f"{manifest_git!r} != {git_sha!r}. "
+                        "For a run started on the known Decimal-bug commit, "
+                        "update the repository and pass --resume-decimal-bugfix."
+                    )
+
+                migrations_value = manifest.get("code_migrations", [])
+                if not isinstance(migrations_value, list):
+                    raise typer.BadParameter(
+                        "resume-run code_migrations must be a list"
+                    )
+                migrations = migrations_value
+                migrations.append(
+                    {
+                        "kind": "BUGFIX_ONLY",
+                        "reason": "DECIMAL128_CANONICAL_HASH_PRECISION",
+                        "from_git_commit_sha": manifest_git,
+                        "to_git_commit_sha": git_sha,
+                        "applied_at_ms": invocation_now_ms,
+                        "spec_version": SPEC_VERSION,
+                        "data_contract_version": DATA_CONTRACT_VERSION,
+                    }
+                )
+                manifest["initial_git_commit_sha"] = manifest.get(
+                    "initial_git_commit_sha",
+                    manifest_git,
+                )
+                manifest["git_commit_sha"] = git_sha
+                manifest["code_migrations"] = migrations
+                manifest["decimal_bugfix_resume_applied"] = True
+                atomic_write_bytes(
+                    manifest_path,
+                    json.dumps(manifest, indent=2, sort_keys=True).encode("utf-8"),
+                )
+
             instruments = load_frozen_instruments(run_dir / "inventory.json")
             manifest["last_invocation_at_ms"] = invocation_now_ms
 
