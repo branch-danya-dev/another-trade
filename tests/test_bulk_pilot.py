@@ -151,6 +151,33 @@ def test_15m_aggregation_keeps_zero_volume_minutes() -> None:
     assert bar.volume == Decimal("14")
 
 
+
+
+def test_decimal128_max_precision_value_hashes_and_writes(tmp_path: Path) -> None:
+    value = "12345678901234567890.123456789012345678"
+    candles = [
+        candle(
+            0,
+            price="1.000000000000000000",
+            volume=value,
+            turnover=value,
+        )
+    ]
+    path = tmp_path / "max-precision.parquet"
+
+    logical_hash, file_hash = write_partition_parquet(
+        symbol="TESTUSDT",
+        candles=candles,
+        path=path,
+    )
+
+    assert len(logical_hash) == 64
+    assert len(file_hash) == 64
+    assert path.exists()
+    table = pq.read_table(path)
+    assert table["volume"][0].as_py() == Decimal(value)
+    assert table["turnover"][0].as_py() == Decimal(value)
+
 def test_parquet_rewrite_has_same_logical_and_file_hash(tmp_path: Path) -> None:
     candles = [
         candle(0, price="100.1", volume="2.5", turnover="250.25"),
