@@ -62,6 +62,9 @@ DATA_CONTRACT_VERSION = "v0.1.12"
 DECIMAL_BUG_AFFECTED_FULL_DOWNLOAD_COMMIT = (
     "682ffce6597db150687d03141224368adbfb571f"
 )
+DECIMAL_FIXED_FULL_DOWNLOAD_COMMIT = (
+    "41b6b9723ed53aa616bd4133d566baa520ae2586"
+)
 
 app = typer.Typer(no_args_is_help=True)
 audit_app = typer.Typer(no_args_is_help=True)
@@ -715,6 +718,16 @@ def bulk_download(
             ),
         ),
     ] = False,
+    resume_performance_update: Annotated[
+        bool,
+        typer.Option(
+            "--resume-performance-update",
+            help=(
+                "Permit the audited v0.1.12 performance-only migration for an "
+                "existing full-download run. No canonical data semantics change."
+            ),
+        ),
+    ] = False,
 ) -> None:
     invocation_now_ms = time.time_ns() // 1_000_000
     git_sha = _git_commit_sha()
@@ -793,17 +806,34 @@ def bulk_download(
 
             manifest_git = manifest.get("git_commit_sha")
             if manifest_git != git_sha:
-                decimal_bugfix_allowed = (
+                migration_reason: str | None = None
+                if (
                     resume_decimal_bugfix
                     and manifest_git
                     == DECIMAL_BUG_AFFECTED_FULL_DOWNLOAD_COMMIT
-                )
-                if not decimal_bugfix_allowed:
+                ):
+                    migration_reason = "DECIMAL128_CANONICAL_HASH_PRECISION"
+                elif (
+                    resume_performance_update
+                    and manifest_git
+                    in {
+                        DECIMAL_BUG_AFFECTED_FULL_DOWNLOAD_COMMIT,
+                        DECIMAL_FIXED_FULL_DOWNLOAD_COMMIT,
+                    }
+                ):
+                    migration_reason = (
+                        "DECIMAL_AND_BULK_IO_PERFORMANCE"
+                        if manifest_git
+                        == DECIMAL_BUG_AFFECTED_FULL_DOWNLOAD_COMMIT
+                        else "BULK_IO_PERFORMANCE_ONLY"
+                    )
+
+                if migration_reason is None:
                     raise typer.BadParameter(
                         "resume-run mismatch for git_commit_sha: "
                         f"{manifest_git!r} != {git_sha!r}. "
-                        "For a run started on the known Decimal-bug commit, "
-                        "update the repository and pass --resume-decimal-bugfix."
+                        "Use --resume-performance-update only for the audited "
+                        "v0.1.12 compatible migration."
                     )
 
                 migrations_value = manifest.get("code_migrations", [])
@@ -814,8 +844,8 @@ def bulk_download(
                 migrations = migrations_value
                 migrations.append(
                     {
-                        "kind": "BUGFIX_ONLY",
-                        "reason": "DECIMAL128_CANONICAL_HASH_PRECISION",
+                        "kind": "COMPATIBLE_BUGFIX_OR_PERFORMANCE",
+                        "reason": migration_reason,
                         "from_git_commit_sha": manifest_git,
                         "to_git_commit_sha": git_sha,
                         "applied_at_ms": invocation_now_ms,
