@@ -5,8 +5,8 @@ import hashlib
 import json
 import sqlite3
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections.abc import Iterator, Sequence
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from decimal import Decimal, localcontext
