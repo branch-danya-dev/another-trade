@@ -1157,11 +1157,13 @@ def mark_price_only_diagnostics(
         )
         aux_count = store.aux_count()
         aux_hash = store.aux_index_sha256()
+        aux_payload_hash = store.aux_payload_index_sha256()
     return {
         "symbol": symbol,
         "mark_price_funding_open_comparison": mark,
         "aux_raw_count": aux_count,
         "aux_raw_index_sha256": aux_hash,
+        "aux_payload_index_sha256": aux_payload_hash,
         "mark_price_only": True,
     }
 
