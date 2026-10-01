@@ -10,9 +10,9 @@ Do not reuse strategy logic, heuristics, risk gates, scoring systems, ML layers,
 
 The current canonical strategy is:
 
-- [docs/SPEC_V0.2.5.md](docs/SPEC_V0.2.5.md)
-- [docs/DATA_CONTRACT_V0.1.9.md](docs/DATA_CONTRACT_V0.1.9.md)
-- [docs/VALIDATION_PROTOCOL_V0.2.8.md](docs/VALIDATION_PROTOCOL_V0.2.8.md)
+- [docs/SPEC_V0.2.6.md](docs/SPEC_V0.2.6.md)
+- [docs/DATA_CONTRACT_V0.1.10.md](docs/DATA_CONTRACT_V0.1.10.md)
+- [docs/VALIDATION_PROTOCOL_V0.2.9.md](docs/VALIDATION_PROTOCOL_V0.2.9.md)
 
 If code and documentation disagree, the frozen specification wins until the specification is intentionally versioned.
 
@@ -144,7 +144,7 @@ Do not use binary float for exchange-grid rounding.
 
 All price/quantity rounding must go through one shared utility used by backtest and live.
 
-The rounding behavior is defined in SPEC_V0.2.5 and must have unit tests for LONG and SHORT cases.
+The rounding behavior is defined in SPEC_V0.2.6 and must have unit tests for LONG and SHORT cases.
 
 ---
 
@@ -174,7 +174,7 @@ Do not use an unfinished 1H candle for trend context.
 
 At every decision timestamp, prove that every input candle has closed.
 
-EMA50 and ATR14 must use the exact seed/smoothing definitions in SPEC_V0.2.5. Never substitute a library default without a parity test.
+EMA50 and ATR14 must use the exact seed/smoothing definitions in SPEC_V0.2.6. Never substitute a library default without a parity test.
 
 Universe cutoff is exactly 09:00 Europe/Amsterdam and only bars closing strictly before the cutoff may rank the universe.
 
@@ -218,7 +218,7 @@ It should, at minimum:
 8. report historical grid metadata status;
 9. normalize CPI, Employment Situation, and FOMC event timestamps from official sources;
 10. calibrate development-only slippage distributions from official archived public trades;
-11. produce the artifacts listed in DATA_CONTRACT_V0.1.9.md;
+11. produce the artifacts listed in DATA_CONTRACT_V0.1.10.md;
 12. produce an immutable manifest/hash for the audited dataset.
 
 The audit should support resumable downloads and local caching. Do not repeatedly hit APIs for already-verified immutable historical pages.
@@ -236,7 +236,7 @@ When the project reaches the backtest phase:
 - pending orders exist as explicit state;
 - reservations exist before fills;
 - live-like order lifecycle states are represented;
-- fill rules match SPEC_V0.2.5;
+- fill rules match SPEC_V0.2.6;
 - ambiguous OHLC order is pessimistic;
 - fees, slippage, and funding are first-class ledger entries;
 - every rejected setup stores a machine-readable reason.
@@ -269,6 +269,7 @@ REJECT_NOTIONAL_MINIMUM
 REJECT_DATA_GAP
 REJECT_GRID_UNKNOWN
 REJECT_ACTIVATION_THROUGH_LEVEL
+REJECT_DELIVERY_RISK
 
 ENTRY_EXPIRED
 ENTRY_CANCELLED_NEWS
@@ -281,6 +282,8 @@ EXIT_BE
 EXIT_TP2
 EXIT_FALSE_BREAK
 EXIT_SESSION_END
+EXIT_DELIVERY_RISK
+EXIT_DELIVERY
 ```
 
 Keep reason codes backward-compatible within one spec version.

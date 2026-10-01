@@ -8,7 +8,7 @@ This repository intentionally does **not** inherit trading logic, strategy engin
 
 ## Current status
 
-- Trading specification: **v0.2.5**
+- Trading specification: **v0.2.6**
 - Specification state: **frozen for implementation**
 - Next phase: **historical data audit / Data Contract validation**
 - Backtest implementation: not started
@@ -18,9 +18,9 @@ The first goal is not to prove profitability. The first goal is to build a repro
 
 ## Documents
 
-- [Trading specification v0.2.5](docs/SPEC_V0.2.5.md)
-- [Data Contract v0.1.9](docs/DATA_CONTRACT_V0.1.9.md)
-- [Validation protocol v0.2.8](docs/VALIDATION_PROTOCOL_V0.2.8.md)
+- [Trading specification v0.2.6](docs/SPEC_V0.2.6.md)
+- [Data Contract v0.1.10](docs/DATA_CONTRACT_V0.1.10.md)
+- [Validation protocol v0.2.9](docs/VALIDATION_PROTOCOL_V0.2.9.md)
 - [Live operations & compliance gate](docs/LIVE_OPERATIONS_AND_COMPLIANCE.md)
 - [Archived specification v0.2.1](docs/SPEC_V0.2.1.md)
 - [Archived specification v0.2](docs/SPEC_V0.2.md)
@@ -82,7 +82,7 @@ Planned data classes:
 - official U.S. CPI and Employment Situation release schedules from BLS;
 - FOMC meeting / statement calendar from the Federal Reserve.
 
-See [docs/DATA_CONTRACT_V0.1.9.md](docs/DATA_CONTRACT_V0.1.9.md) for the audit requirements and known limitations.
+See [docs/DATA_CONTRACT_V0.1.10.md](docs/DATA_CONTRACT_V0.1.10.md) for the audit requirements and known limitations.
 
 
 ## Data Audit milestone 1
@@ -154,3 +154,22 @@ another-trade audit bulk-boundary-pilot --month 2024-09
 ```
 
 The full universe download is blocked until the clean logical hashes match and the MATIC/POL partial-month partition test passes.
+
+
+### Final targeted gates before full download
+
+Historical fast-funding / Mark Price equivalence:
+
+```bash
+another-trade audit funding-mark-pilot
+```
+
+This probes development-period symbol-months selected for historically observed short funding cadence and verifies every funding timestamp against exact 1m and 60m Mark Price OPEN while retaining raw evidence and semantic payload hashes.
+
+Refresh the migration/delivery boundary pilot with funding and Mark Price evidence:
+
+```bash
+another-trade audit bulk-boundary-pilot --month 2024-09
+```
+
+Full-universe download remains blocked until both targeted gates pass.
