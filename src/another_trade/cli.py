@@ -37,8 +37,8 @@ from another_trade.bybit.client import BybitPublicClient
 from another_trade.io import atomic_write_bytes
 from another_trade.time import align_down_ms
 
-SPEC_VERSION = "v0.2.5"
-DATA_CONTRACT_VERSION = "v0.1.9"
+SPEC_VERSION = "v0.2.6"
+DATA_CONTRACT_VERSION = "v0.1.10"
 
 app = typer.Typer(no_args_is_help=True)
 audit_app = typer.Typer(no_args_is_help=True)
