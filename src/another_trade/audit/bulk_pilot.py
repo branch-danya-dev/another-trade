@@ -1188,6 +1188,7 @@ def compare_pilot_runs(
     rows: list[dict[str, object]] = []
     all_logical_equal = True
     all_parquet_equal = True
+    all_payload_equal = True
     for symbol in reference_symbols:
         ref_path = reference_run / "partitions" / symbol / (
             f"{reference_manifest['month']}.json"
@@ -1208,6 +1209,7 @@ def compare_pilot_runs(
         )
         all_logical_equal = all_logical_equal and logical_equal
         all_parquet_equal = all_parquet_equal and parquet_equal
+        all_payload_equal = all_payload_equal and payload_index_equal
         rows.append(
             {
                 "symbol": symbol,
@@ -1226,6 +1228,7 @@ def compare_pilot_runs(
         "symbol_count": len(reference_symbols),
         "all_logical_equal": all_logical_equal,
         "all_parquet_equal": all_parquet_equal,
+        "all_payload_equal": all_payload_equal,
         "partitions": rows,
     }
 
