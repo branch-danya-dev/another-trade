@@ -289,6 +289,28 @@ class BybitPublicClient:
             seen_cursors.add(next_cursor)
             cursor = next_cursor
 
+    def announcement_page_raw(
+        self,
+        *,
+        page: int,
+        limit: int = 20,
+        locale: str = "en-US",
+    ) -> tuple[bytes, dict[str, Any]]:
+        if page < 1:
+            raise ValueError("announcement page must be >= 1")
+        if limit < 1:
+            raise ValueError("announcement limit must be >= 1")
+        raw = self._request_raw(
+            "/v5/announcements/index",
+            {
+                "locale": locale,
+                "page": page,
+                "limit": limit,
+            },
+            cacheable=False,
+        )
+        return raw, self._decode(raw)
+
     @staticmethod
     def _kline_cache_guard(interval: str, now_ms: int) -> Callable[[bytes], bool]:
         def guard(raw: bytes) -> bool:
