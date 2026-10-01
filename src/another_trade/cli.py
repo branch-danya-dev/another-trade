@@ -12,12 +12,14 @@ import typer
 
 from another_trade.audit.bulk_pilot import (
     PARQUET_WRITER_CONFIG,
+    PartitionStatus,
     PilotAbort,
     compare_pilot_runs,
     download_symbol_month,
     instrument_covers_month,
     mark_price_only_diagnostics,
     parse_month,
+    partition_status,
     pilot_symbol_diagnostics,
     select_default_pilot_symbols,
     write_pilot_summary,
