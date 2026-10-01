@@ -27,6 +27,24 @@ from another_trade.audit.coverage import (
     run_sample_coverage,
     write_coverage,
 )
+from another_trade.audit.full_download import (
+    FULL_DATA_END_MS,
+    FULL_DATA_START_MS,
+    STRATEGY_DEVELOPMENT_START_MS,
+    STRATEGY_HOLDOUT_END_MS,
+    STRATEGY_HOLDOUT_START_MS,
+    STRATEGY_VALIDATION_START_MS,
+    build_delisting_announcement_candidates,
+    build_partition_plan,
+    discover_lifetime_records,
+    fetch_announcements_snapshot,
+    load_frozen_instruments,
+    load_partition_plan,
+    partition_manifest_is_complete,
+    process_full_partition,
+    structural_summary,
+    write_partition_plan,
+)
 from another_trade.audit.identity import load_identity_config
 from another_trade.audit.inventory import (
     collect_inventory,
@@ -657,6 +675,266 @@ def funding_mark_pilot(
     typer.echo(f"qualifying historical fast-funding probes: {len(qualifying)}")
     if len(qualifying) < 2:
         raise typer.Exit(code=5)
+
+
+@audit_app.command("bulk-download")
+def bulk_download(
+    artifact_dir: Annotated[Path, typer.Option()] = Path("artifacts/data-audit"),
+    resume_run: Annotated[
+        Path | None,
+        typer.Option(help="Existing full bulk-download run directory to resume."),
+    ] = None,
+    include_open: Annotated[
+        bool,
+        typer.Option(
+            help=(
+                "Allow downloading calendar partitions that have not passed the "
+                "24h immutability horizon. Default is false."
+            )
+        ),
+    ] = False,
+    max_partitions: Annotated[
+        int | None,
+        typer.Option(
+            min=1,
+            help="Optional smoke-test cap for newly processed partitions.",
+        ),
+    ] = None,
+) -> None:
+    invocation_now_ms = time.time_ns() // 1_000_000
+    git_sha = _git_commit_sha()
+
+    with BybitPublicClient(cache_dir=None) as client:
+        if resume_run is None:
+            snapshot = collect_inventory(client)
+            run_id = f"{invocation_now_ms}-full-{snapshot.sha256[:12]}"
+            run_dir = artifact_dir / "bulk-download" / run_id
+            run_dir.mkdir(parents=True, exist_ok=False)
+            manifest: dict[str, object] = {
+                "run_id": run_id,
+                "kind": "bulk-download",
+                "created_at_ms": invocation_now_ms,
+                "last_invocation_at_ms": invocation_now_ms,
+                "inventory_sha256": snapshot.sha256,
+                "git_commit_sha": git_sha,
+                "spec_version": SPEC_VERSION,
+                "data_contract_version": DATA_CONTRACT_VERSION,
+                "requests_per_second": client.requests_per_second,
+                "full_data_start_ms": FULL_DATA_START_MS,
+                "full_data_end_ms": FULL_DATA_END_MS,
+                "development_start_ms": STRATEGY_DEVELOPMENT_START_MS,
+                "validation_start_ms": STRATEGY_VALIDATION_START_MS,
+                "holdout_start_ms": STRATEGY_HOLDOUT_START_MS,
+                "holdout_end_ms": STRATEGY_HOLDOUT_END_MS,
+                "calendar_completion_after_holdout_end": True,
+                "holdout_protection": {
+                    "mode": "STRUCTURAL_DATA_ONLY",
+                    "strategy_metrics_computed": False,
+                    "signals_computed": False,
+                    "setup_counts_computed": False,
+                    "pnl_computed": False,
+                },
+                "software_versions": {
+                    "python": platform.python_version(),
+                    "python_implementation": platform.python_implementation(),
+                    "platform": platform.platform(),
+                    "tzdata": _package_version("tzdata"),
+                    "httpx": _package_version("httpx"),
+                    "pydantic": _package_version("pydantic"),
+                    "pyarrow": _package_version("pyarrow"),
+                    "typer": _package_version("typer"),
+                },
+                "identity_relationship_config": {
+                    "version": load_identity_config().version,
+                    "sha256": load_identity_config().sha256,
+                },
+                "status": "LIFETIME_DISCOVERY",
+            }
+            atomic_write_bytes(
+                run_dir / "manifest.json",
+                json.dumps(manifest, indent=2, sort_keys=True).encode("utf-8"),
+            )
+            write_inventory(snapshot, run_dir / "inventory.json")
+            instruments = snapshot.instruments
+        else:
+            run_dir = resume_run
+            manifest_path = run_dir / "manifest.json"
+            if not manifest_path.exists():
+                raise typer.BadParameter("resume-run has no manifest.json")
+            manifest_value = json.loads(manifest_path.read_text(encoding="utf-8"))
+            if not isinstance(manifest_value, dict):
+                raise typer.BadParameter("bulk-download manifest must be an object")
+            manifest = manifest_value
+            for key, expected in (
+                ("kind", "bulk-download"),
+                ("git_commit_sha", git_sha),
+                ("spec_version", SPEC_VERSION),
+                ("data_contract_version", DATA_CONTRACT_VERSION),
+            ):
+                if manifest.get(key) != expected:
+                    raise typer.BadParameter(
+                        f"resume-run mismatch for {key}: "
+                        f"{manifest.get(key)!r} != {expected!r}"
+                    )
+            instruments = load_frozen_instruments(run_dir / "inventory.json")
+            manifest["last_invocation_at_ms"] = invocation_now_ms
+
+        lifetime_path = run_dir / "lifetimes.jsonl"
+        lifetimes = discover_lifetime_records(
+            client,
+            instruments,
+            path=lifetime_path,
+            now_ms=invocation_now_ms,
+        )
+        unresolved = [
+            record.symbol
+            for record in lifetimes.values()
+            if record.eligible and record.first_trade_ms is None
+        ]
+        if unresolved:
+            manifest["lifetime_unresolved_symbols"] = unresolved
+            manifest["status"] = "LIFETIME_DISCOVERY_INCOMPLETE"
+            atomic_write_bytes(
+                run_dir / "manifest.json",
+                json.dumps(manifest, indent=2, sort_keys=True).encode("utf-8"),
+            )
+            raise typer.BadParameter(
+                f"first trade unresolved for {len(unresolved)} eligible symbols"
+            )
+
+        plan_path = run_dir / "partition-plan.json"
+        if plan_path.exists():
+            tasks = load_partition_plan(plan_path)
+        else:
+            tasks = build_partition_plan(lifetimes)
+            write_partition_plan(plan_path, tasks)
+
+        manifest["planned_partition_count"] = len(tasks)
+        manifest["frozen_eligible_symbol_count"] = sum(
+            1 for record in lifetimes.values() if record.eligible
+        )
+
+        announcement_path = run_dir / "announcements-snapshot.json"
+        if announcement_path.exists():
+            announcements_value = json.loads(
+                announcement_path.read_text(encoding="utf-8")
+            )
+            announcements = (
+                [item for item in announcements_value if isinstance(item, dict)]
+                if isinstance(announcements_value, list)
+                else []
+            )
+        else:
+            announcements = fetch_announcements_snapshot(
+                client,
+                run_dir=run_dir,
+                now_ms=invocation_now_ms,
+            )
+        candidates = build_delisting_announcement_candidates(
+            instruments,
+            announcements,
+        )
+        atomic_write_bytes(
+            run_dir / "delisting-announcement-candidates.json",
+            json.dumps(
+                candidates,
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+            ).encode("utf-8"),
+        )
+
+        manifest["announcement_count"] = len(announcements)
+        manifest["delisting_announcement_candidate_count"] = len(candidates)
+        manifest["status"] = "DOWNLOADING"
+        atomic_write_bytes(
+            run_dir / "manifest.json",
+            json.dumps(manifest, indent=2, sort_keys=True).encode("utf-8"),
+        )
+
+        newly_processed = 0
+        pending_open = 0
+        skipped_complete = 0
+        try:
+            for index, task in enumerate(tasks, start=1):
+                if partition_manifest_is_complete(run_dir, task):
+                    skipped_complete += 1
+                    continue
+
+                bounds = parse_month(task.month)
+                if (
+                    not include_open
+                    and partition_status(bounds, invocation_now_ms)
+                    is PartitionStatus.OPEN
+                ):
+                    pending_open += 1
+                    continue
+
+                partition = process_full_partition(
+                    client,
+                    task=task,
+                    run_dir=run_dir,
+                    now_ms=invocation_now_ms,
+                )
+                newly_processed += 1
+
+                if newly_processed == 1 or newly_processed % 25 == 0:
+                    typer.echo(
+                        f"[{index}/{len(tasks)}] {task.month} {task.symbol} "
+                        f"missing={partition['missing_minutes']} "
+                        f"funding={partition['funding_event_count']}"
+                    )
+
+                if max_partitions is not None and newly_processed >= max_partitions:
+                    break
+        except Exception as exc:
+            summary = structural_summary(run_dir, tasks)
+            atomic_write_bytes(
+                run_dir / "structural-summary.json",
+                json.dumps(summary, indent=2, sort_keys=True).encode("utf-8"),
+            )
+            manifest["status"] = "INTERRUPTED_ERROR"
+            manifest["last_error"] = f"{type(exc).__name__}: {exc}"
+            manifest["last_invocation_new_partitions"] = newly_processed
+            manifest["last_invocation_pending_open"] = pending_open
+            manifest["last_invocation_skipped_complete"] = skipped_complete
+            atomic_write_bytes(
+                run_dir / "manifest.json",
+                json.dumps(manifest, indent=2, sort_keys=True).encode("utf-8"),
+            )
+            raise
+
+    summary = structural_summary(run_dir, tasks)
+    atomic_write_bytes(
+        run_dir / "structural-summary.json",
+        json.dumps(summary, indent=2, sort_keys=True).encode("utf-8"),
+    )
+
+    completed = int(summary["completed_partition_count"])
+    if completed == len(tasks):
+        status = "COMPLETE"
+    elif pending_open > 0 and max_partitions is None:
+        status = "WAITING_FOR_OPEN_PARTITIONS"
+    else:
+        status = "PARTIAL"
+
+    manifest["status"] = status
+    manifest["last_invocation_new_partitions"] = newly_processed
+    manifest["last_invocation_pending_open"] = pending_open
+    manifest["last_invocation_skipped_complete"] = skipped_complete
+    manifest["completed_partition_count"] = completed
+    manifest["updated_at_ms"] = time.time_ns() // 1_000_000
+    atomic_write_bytes(
+        run_dir / "manifest.json",
+        json.dumps(manifest, indent=2, sort_keys=True).encode("utf-8"),
+    )
+
+    typer.echo(f"bulk download run: {run_dir}")
+    typer.echo(
+        f"status={status}; completed={completed}/{len(tasks)}; "
+        f"new={newly_processed}; pending_open={pending_open}"
+    )
+    typer.echo("No strategy signals, setup counts, or PnL were computed.")
 
 
 if __name__ == "__main__":
