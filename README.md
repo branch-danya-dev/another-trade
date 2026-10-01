@@ -19,8 +19,8 @@ The first goal is not to prove profitability. The first goal is to build a repro
 ## Documents
 
 - [Trading specification v0.2.6](docs/SPEC_V0.2.6.md)
-- [Data Contract v0.1.11](docs/DATA_CONTRACT_V0.1.11.md)
-- [Validation protocol v0.2.10](docs/VALIDATION_PROTOCOL_V0.2.10.md)
+- [Data Contract v0.1.12](docs/DATA_CONTRACT_V0.1.12.md)
+- [Validation protocol v0.2.11](docs/VALIDATION_PROTOCOL_V0.2.11.md)
 - [Live operations & compliance gate](docs/LIVE_OPERATIONS_AND_COMPLIANCE.md)
 - [Archived specification v0.2.1](docs/SPEC_V0.2.1.md)
 - [Archived specification v0.2](docs/SPEC_V0.2.md)
@@ -82,7 +82,7 @@ Planned data classes:
 - official U.S. CPI and Employment Situation release schedules from BLS;
 - FOMC meeting / statement calendar from the Federal Reserve.
 
-See [docs/DATA_CONTRACT_V0.1.11.md](docs/DATA_CONTRACT_V0.1.11.md) for the audit requirements and known limitations.
+See [docs/DATA_CONTRACT_V0.1.12.md](docs/DATA_CONTRACT_V0.1.12.md) for the audit requirements and known limitations.
 
 
 ## Data Audit milestone 1
@@ -173,3 +173,28 @@ another-trade audit bulk-boundary-pilot --month 2024-09
 ```
 
 Full-universe download remains blocked until both targeted gates pass.
+
+
+## Full historical download
+
+The pilot gate is closed. The canonical full download is:
+
+```bash
+another-trade audit bulk-download
+```
+
+The run freezes the current inventory, discovers/resumes historical lifetimes, creates an oldest-first symbol/month plan, stores canonical 1m + funding + hourly Mark Price + delivery Index Price evidence, and computes structural integrity only.
+
+For a two-partition smoke test before committing to the long run:
+
+```bash
+another-trade audit bulk-download --max-partitions 2
+```
+
+Then continue the exact same run:
+
+```bash
+another-trade audit bulk-download --resume-run "<run-dir>"
+```
+
+By default OPEN partitions are skipped. On 2026-10-01 the September 2026 partition remains pending until 2026-10-02 00:00 UTC; resume the same run after it seals.
