@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 from decimal import Decimal
@@ -21,6 +22,7 @@ from another_trade.audit.bulk_pilot import (
     missing_minute_starts,
     page_windows,
     parse_month,
+    payload_sha256,
     partition_status,
     write_partition_parquet,
 )
@@ -359,3 +361,59 @@ def test_partial_month_download_uses_only_requested_lifetime_range(tmp_path: Pat
     finally:
         conn.close()
     assert captured != bounds.end_ms + 2 * DAY_MS
+
+
+
+def test_payload_hash_ignores_top_level_server_time() -> None:
+    first = (
+        b'{"retCode":0,"retMsg":"OK","result":{"list":[["1","2"]]},'
+        b'"retExtInfo":{},"time":111}'
+    )
+    second = (
+        b'{"time":999,"result":{"list":[["1","2"]]},'
+        b'"retMsg":"OK","retCode":0,"retExtInfo":{}}'
+    )
+
+    assert hashlib.sha256(first).hexdigest() != hashlib.sha256(second).hexdigest()
+    assert payload_sha256(first) == payload_sha256(second)
+
+
+def test_payload_hash_changes_when_result_changes() -> None:
+    first = b'{"retCode":0,"retMsg":"OK","result":{"value":"1"},"time":1}'
+    second = b'{"retCode":0,"retMsg":"OK","result":{"value":"2"},"time":1}'
+    assert payload_sha256(first) != payload_sha256(second)
+
+
+def test_raw_store_persists_raw_and_payload_hashes(tmp_path: Path) -> None:
+    path = tmp_path / "BTCUSDT" / "2024-06.sqlite3"
+    raw = b'{"retCode":0,"retMsg":"OK","result":{"list":[]},"time":123}'
+    params = {
+        "category": "linear",
+        "symbol": "BTCUSDT",
+        "interval": "1",
+        "start": 0,
+        "end": 0,
+        "limit": 1000,
+    }
+
+    with RawPageStore(path, symbol="BTCUSDT", month="2024-06") as store:
+        store.put_page(
+            window=PageWindow(start_ms=0, end_ms=0),
+            endpoint="/v5/market/kline",
+            params=params,
+            raw=raw,
+            raw_rows=0,
+            captured_at_ms=10,
+        )
+        assert len(store.payload_index_sha256()) == 64
+
+    conn = sqlite3.connect(path)
+    try:
+        row = conn.execute(
+            "SELECT raw_sha256, payload_sha256 FROM responses"
+        ).fetchone()
+    finally:
+        conn.close()
+
+    assert row[0] == hashlib.sha256(raw).hexdigest()
+    assert row[1] == payload_sha256(raw)
